@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HotGraph</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">HotGraph</div>
+    <button id="feedToggle" class="btn">Feed</button>
+
+    <label class="ctl">
+      Chain
+      <select id="chain">
+        <option value="">all</option>
+        <option value="solana">solana</option>
+        <option value="evm">evm</option>
+      </select>
+    </label>
+
+    <label class="ctl checkbox">
+      <input type="checkbox" id="includeSold" checked>
+      show sold
+    </label>
+
+    <label class="ctl">
+      Min mcap
+      <input type="range" id="minMcap" min="0" max="7" step="0.1" value="0">
+      <span class="val" id="minMcapVal">$0</span>
+    </label>
+
+    <label class="ctl">
+      Min %
+      <input type="range" id="minPct" min="0" max="2" step="0.01" value="0">
+      <span class="val" id="minPctVal">0%</span>
+    </label>
+
+    <label class="ctl">
+      Window
+      <select id="window">
+        <option value="0" selected>all time</option>
+        <option value="1">last 1h</option>
+        <option value="6">last 6h</option>
+        <option value="12">last 12h</option>
+        <option value="24">last 24h</option>
+      </select>
+    </label>
+
+    <label class="ctl">
+      Sort
+      <select id="sortBy">
+        <option value="latest">latest actions</option>
+        <option value="mcap" selected>biggest mcap</option>
+        <option value="holders">most holders</option>
+      </select>
+    </label>
+
+    <label class="ctl">
+      Top
+      <select id="topN">
+        <option value="50">50</option>
+        <option value="150" selected>150</option>
+        <option value="400">400</option>
+        <option value="0">all</option>
+      </select>
+    </label>
+
+    <button id="soundToggle" class="btn" title="play a sound when a new alert arrives">🔔</button>
+    <button id="reload" class="btn">Reload</button>
+    <button id="listToggle" class="btn">Tokens</button>
+    <button id="mergeToggle" class="btn">Merge</button>
+    <div class="spacer"></div>
+    <div class="stat" id="sync" title="when alerts were last fetched from Telegram"></div>
+    <div class="stat" id="stat"></div>
+  </header>
+
+  <aside id="feedPanel" class="panel left narrow" hidden>
+    <div class="panel-head">
+      <strong>Feed</strong>
+      <span class="panel-sub" id="feedMeta"></span>
+      <button id="feedClose" class="btn small">✕</button>
+    </div>
+    <div class="seg" id="feedSeg">
+      <button data-kind="all" class="active">all</button>
+      <button data-kind="buys">buys</button>
+      <button data-kind="sells">sells</button>
+      <button data-kind="swaps">swaps</button>
+      <button data-kind="other">other</button>
+    </div>
+    <div id="feedList" class="token-list"></div>
+  </aside>
+
+  <aside id="tokenPanel" class="panel narrow" hidden>
+    <div class="panel-head">
+      <strong>Tokens</strong>
+      <span class="panel-sub" id="tokenListMeta"></span>
+      <button id="listClose" class="btn small">✕</button>
+    </div>
+    <div class="seg" id="sortSeg">
+      <button data-sort="latest">latest</button>
+      <button data-sort="mcap">mcap</button>
+      <button data-sort="holders">holders</button>
+    </div>
+    <div id="tokenList" class="token-list"></div>
+  </aside>
+
+  <aside id="mergePanel" class="panel" hidden>
+    <div class="panel-head">
+      <strong>Merge identities</strong>
+      <button id="mergeClose" class="btn small">✕</button>
+    </div>
+    <p class="panel-hint">
+      Select the identities that belong to one person — a handle from one bot,
+      wallet addresses from others, or several wallets of the same person —
+      then name them. Works across any two or all three bots.
+    </p>
+    <input id="traderSearch" class="search" placeholder="search handle / address / person…">
+    <div id="traderList" class="trader-list"></div>
+    <div class="merge-actions">
+      <input id="mergeName" class="search" placeholder="person name">
+      <button id="mergeBtn" class="btn primary" disabled>Merge 0</button>
+    </div>
+    <div class="panel-head groups-head"><strong>Merged people</strong></div>
+    <div id="groupList" class="group-list"></div>
+  </aside>
+
+  <svg id="graph"></svg>
+
+  <button id="resetZoom" class="map-btn" title="reset zoom — frame the whole graph (double-click the map also works)">⛶</button>
+
+  <div id="nodeActions" class="node-actions" hidden>
+    <button id="actVerify" title="check every holder's real balance on-chain">✓ verify holders</button>
+    <button id="actChart" title="open the GMGN chart in a new tab">📈 chart</button>
+  </div>
+
+  <div class="legend">
+    <div><span class="dot token"></span> token — size = market cap</div>
+    <div><span class="dot person"></span> person — size = % of supply</div>
+    <div><span class="dot sold"></span> sold — sized by peak held</div>
+    <div><span class="dot dashed"></span> dashed = estimated</div>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+  <div id="tip" class="tip" hidden></div>
+
+  <script src="/static/vendor/d3.v7.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# The Telegram bots we read alerts from.
+#
+# `chat` is what you'd type in Telegram's search bar (@username), or a numeric
+# chat id. Run `python -m hotgraph.capture --list` to print both for every bot
+# you're subscribed to.
+#
+# All three use the same `tracker` parser: the alert layouts share a
+# "[CHAIN] ... — S: N" header, and tracker.py detects which variant it's
+# looking at, so it doesn't matter which bot is which.
+#
+# `chain_hint` is only consulted when an alert has no [CHAIN] tag — leave it
+# null unless a bot covers exactly one chain and omits the tag.
+
+sources:
+  - id: bot_a
+    chat: "@FOMOTRACKALL_BOT"
+    parser: tracker
+    chain_hint: null
+    enabled: true
+
+  - id: bot_b
+    chat: "@TRACKALL_BOT"
+    parser: tracker
+    chain_hint: null
+    enabled: true
+
+  - id: bot_c
+    chat: "@multichaintxtrackerbot"
+    parser: tracker
+    chain_hint: null
+    enabled: true

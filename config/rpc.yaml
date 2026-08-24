@@ -1,0 +1,12 @@
+# Public RPC endpoints used by the "verify holders" button — key-free.
+# Values here override the built-in defaults (BSC, ETH, BASE, ARB, HYPE, SOL
+# are preconfigured in hotgraph/verify.py).
+#
+# Chains the bots use that have NO default yet — fill these in when you have
+# an endpoint, otherwise verification for them reports "no RPC configured":
+rpc:
+  # RH: "https://<robinhood-chain-rpc>"
+  # ROBINHOOD: "https://<robinhood-chain-rpc>"
+  # ARC: "https://<arc-rpc>"
+  # ABS: "https://api.mainnet.abs.xyz"
+  # STBL: "https://<stbl-rpc>"
