@@ -73,12 +73,14 @@ async def cmd_list(client) -> None:
 
 
 async def backfill_one(
-    client, conn, src: Source, limit: int | None, since_ts: float | None = None
+    client, conn, src: Source, limit: int | None, since_ts: float | None = None,
+    progress=None,
 ) -> tuple[int, int]:
     """Walk a chat's history newest-first. Returns (new, seen).
 
     since_ts bounds how far back we go — iteration is newest-first, so the
-    first message older than the cutoff ends that chat's scan.
+    first message older than the cutoff ends that chat's scan. progress, if
+    given, is called as progress(seen, new) every 100 messages.
     """
     entity = await client.get_entity(src.chat)
     new = seen = 0
@@ -88,10 +90,14 @@ async def backfill_one(
         seen += 1
         if _store(conn, src.id, msg):
             new += 1
+        if progress and seen % 100 == 0:
+            progress(seen, new)
         if seen % 500 == 0:
             conn.commit()
             print(f"  {src.id}: {seen} scanned, {new} new...", flush=True)
     conn.commit()
+    if progress:
+        progress(seen, new)
     return new, seen
 
 

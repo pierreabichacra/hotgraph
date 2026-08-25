@@ -73,6 +73,27 @@ def _rebuild_tokens(conn) -> None:
         GROUP BY e.chain, e.token_key
         """
     )
+    # DexScreener-fetched caps (the drawer's "refresh mcaps" button) override
+    # the alert-stated figure when fresher — otherwise every rebuild would
+    # silently roll tokens back to their last-alert cap.
+    conn.execute(
+        """
+        UPDATE tokens
+           SET last_mcap_usd = (SELECT m.mcap_usd FROM mcap_checks m
+                                 WHERE m.chain = tokens.chain
+                                   AND m.token_key = tokens.token_key),
+               fdv_usd       = (SELECT m.fdv_usd FROM mcap_checks m
+                                 WHERE m.chain = tokens.chain
+                                   AND m.token_key = tokens.token_key),
+               mcap_as_of    = (SELECT m.ts FROM mcap_checks m
+                                 WHERE m.chain = tokens.chain
+                                   AND m.token_key = tokens.token_key)
+         WHERE EXISTS (SELECT 1 FROM mcap_checks m
+                        WHERE m.chain = tokens.chain
+                          AND m.token_key = tokens.token_key
+                          AND m.ts > COALESCE(tokens.mcap_as_of, 0))
+        """
+    )
 
 
 def run() -> dict:
@@ -170,6 +191,14 @@ def run() -> dict:
                     "realized": 0.0,
                     "pnl": None,
                     "entry_mcap": None,
+                    # Buy-weighted average market cap: weight is the share of
+                    # supply each buy took, so a big buy at $50K counts for
+                    # more than a nibble at $5M. Falls back to a plain mean
+                    # of buy mcaps when the alerts carried no supply %.
+                    "mcap_w": 0.0,
+                    "mcap_wsum": 0.0,
+                    "mcap_n": 0,
+                    "mcap_sum": 0.0,
                     "exited": False,
                     "n": 0,
                     "missing_pct": False,
@@ -224,8 +253,14 @@ def run() -> dict:
                 else:
                     st["realized"] += usd
 
-            if r["side"] == "BUY" and st["entry_mcap"] is None and r["mcap_usd"]:
-                st["entry_mcap"] = r["mcap_usd"]
+            if r["side"] == "BUY" and r["mcap_usd"]:
+                if st["entry_mcap"] is None:
+                    st["entry_mcap"] = r["mcap_usd"]
+                st["mcap_n"] += 1
+                st["mcap_sum"] += r["mcap_usd"]
+                if pct:
+                    st["mcap_w"] += pct
+                    st["mcap_wsum"] += pct * r["mcap_usd"]
 
             if r["pnl_usd"] is not None:
                 st["pnl"] = (st["pnl"] or 0.0) + r["pnl_usd"]
@@ -285,13 +320,20 @@ def run() -> dict:
             if pnl is None and status == SOLD and st["invested"] and st["realized"]:
                 pnl = st["realized"] - st["invested"]
 
+            if st["mcap_w"] > 0:
+                avg_entry = st["mcap_wsum"] / st["mcap_w"]
+            elif st["mcap_n"]:
+                avg_entry = st["mcap_sum"] / st["mcap_n"]
+            else:
+                avg_entry = None
+
             conn.execute(
                 """INSERT INTO positions
                      (chain, token_key, trader_key, person, trader_handle,
                       pct_supply, peak_pct, bought_pct, sold_pct, status, confidence,
                       invested_usd, realized_usd, pnl_usd, entry_mcap_usd,
-                      n_events, first_seen, last_seen)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                      avg_entry_mcap_usd, n_events, first_seen, last_seen)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     chain, token_key, trader_key, st["person"], st["trader_handle"],
                     round(st["running"], 6), round(st["peak"], 6),
@@ -299,7 +341,9 @@ def run() -> dict:
                     status, confidence,
                     round(st["invested"], 2), round(st["realized"], 2),
                     round(pnl, 2) if pnl is not None else None,
-                    st["entry_mcap"], st["n"], st["first"], st["last"],
+                    st["entry_mcap"],
+                    round(avg_entry, 2) if avg_entry is not None else None,
+                    st["n"], st["first"], st["last"],
                 ),
             )
 

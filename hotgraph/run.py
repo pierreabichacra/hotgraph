@@ -78,6 +78,11 @@ async def amain(host: str, port: int) -> None:
     client = make_client()
     await client.start()
 
+    # Hand the API the live client so the Rebuild button can backfill through
+    # it instead of opening a second session (-> AUTH_KEY_DUPLICATED).
+    from . import api as api_mod
+    api_mod.tg_client = client
+
     events_added = await catch_up(client, sources)
     if events_added:
         print(f"  {events_added} new event(s) — rebuilding positions", flush=True)

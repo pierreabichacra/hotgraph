@@ -18,6 +18,7 @@ from .config import load_sources, norm_addr
 from .db import session as db_session
 from .parsers import get_parser
 from .parsers.base import ParseContext
+from .parsers.tracker import is_multi_wallet
 
 # Alerts with no token trade in them: plain transfers, approvals, raw method
 # calls, and your own bot commands / the bot's replies to them. Expected not
@@ -32,9 +33,10 @@ RE_NON_TRADE = re.compile(
 def is_non_trade(text: str) -> bool:
     if RE_NON_TRADE.search(text):
         return True
-    # A trade alert always names both legs of a swap.
+    # A trade alert always names both legs of a swap — or, for the grouped
+    # "N wallets sold/bought" layout, says so in the header.
     has_swap = "Swap" in text or ("SENT" in text.upper() and "RECEIV" in text.upper())
-    return not has_swap
+    return not has_swap and not is_multi_wallet(text)
 
 
 def _insert_event(conn, raw_id: int, source_id: str, ev) -> bool:
@@ -162,7 +164,16 @@ def ingest_one(conn, raw_id: int) -> int:
     return added
 
 
-def run(source_filter: str | None = None, show_unparsed: int = 0) -> dict:
+def run(
+    source_filter: str | None = None,
+    show_unparsed: int = 0,
+    since_ts: float | None = None,
+    progress=None,
+) -> dict:
+    """since_ts limits the rebuild to messages at or after that time — events
+    are dropped and re-derived from just that window, so positions reflect it.
+    progress, if given, is called as progress(done, total) every few hundred
+    messages (used by the web UI's rebuild bar)."""
     sources = {s.id: s for s in load_sources()}
     stats: dict[str, dict] = {}
     unparsed: list[tuple[str, str]] = []
@@ -176,14 +187,24 @@ def run(source_filter: str | None = None, show_unparsed: int = 0) -> dict:
         conn.execute("DELETE FROM positions")
         conn.execute("DELETE FROM tokens")
 
-        q = "SELECT id, source, ts, text, raw_json FROM raw_messages"
-        params: tuple = ()
+        conds: list[str] = []
+        params: list = []
         if source_filter:
-            q += " WHERE source = ?"
-            params = (source_filter,)
-        q += " ORDER BY ts ASC"
+            conds.append("source = ?")
+            params.append(source_filter)
+        if since_ts is not None:
+            conds.append("ts >= ?")
+            params.append(int(since_ts))
+        where = f" WHERE {' AND '.join(conds)}" if conds else ""
+        q = f"SELECT id, source, ts, text, raw_json FROM raw_messages{where} ORDER BY ts ASC"
 
-        for row in conn.execute(q, params):
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM raw_messages{where}", params
+        ).fetchone()[0]
+
+        for i, row in enumerate(conn.execute(q, params)):
+            if progress and i % 200 == 0:
+                progress(i, total)
             src_id = row["source"]
             st = stats.setdefault(
                 src_id,
@@ -246,9 +267,13 @@ def main() -> None:
     ap.add_argument("--source", help="only this source id")
     ap.add_argument("--show-unparsed", type=int, default=0, metavar="N",
                     help="print N messages no parser matched")
+    ap.add_argument("--days", type=float, default=None,
+                    help="only rebuild from messages this many days back")
     args = ap.parse_args()
 
-    result = run(args.source, args.show_unparsed)
+    import time as _time
+    since_ts = _time.time() - args.days * 86400 if args.days else None
+    result = run(args.source, args.show_unparsed, since_ts=since_ts)
     stats = result["stats"]
 
     if not stats:

@@ -1,12 +1,20 @@
-# Public RPC endpoints used by the "verify holders" button — key-free.
-# Values here override the built-in defaults (BSC, ETH, BASE, ARB, HYPE, SOL
-# are preconfigured in hotgraph/verify.py).
+# RPC endpoints used by the "verify holders" button — key-free, public.
 #
-# Chains the bots use that have NO default yet — fill these in when you have
-# an endpoint, otherwise verification for them reports "no RPC configured":
+# Each chain tries several endpoints in order (failover on rate limits and
+# outages). ETH, BSC, BASE, ARB, HYPE, RH, ABS, STBL and SOL all ship with
+# built-in fallback lists (see RPC_DEFAULTS in hotgraph/verify.py, sourced
+# from chainlist.org).
+#
+# Entries here are tried FIRST, then the built-in defaults as fallbacks.
+# A value can be a single URL or a list:
+#
+# rpc:
+#   BSC: "https://my-private-bsc-node.example.com"
+#   ETH:
+#     - "https://my-eth-node.example.com"
+#     - "https://ethereum-rpc.publicnode.com"
+#
+# Chains with NO built-in default yet — fill in when they have a public
+# mainnet RPC (chainlist.org lists only a testnet for ARC so far):
 rpc:
-  # RH: "https://<robinhood-chain-rpc>"
-  # ROBINHOOD: "https://<robinhood-chain-rpc>"
-  # ARC: "https://<arc-rpc>"
-  # ABS: "https://api.mainnet.abs.xyz"
-  # STBL: "https://<stbl-rpc>"
+  # ARC: "https://<arc-mainnet-rpc>"

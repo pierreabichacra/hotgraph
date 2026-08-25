@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS tokens (
     symbol         TEXT,
     name           TEXT,
     last_mcap_usd  REAL,
+    fdv_usd        REAL,               -- fully diluted valuation (DexScreener); NULL when unknown
     mcap_as_of     INTEGER,
     n_events       INTEGER NOT NULL DEFAULT 0,
     first_seen     INTEGER,
@@ -95,6 +96,28 @@ CREATE TABLE IF NOT EXISTS verifications (
     balance    REAL,
     ts         INTEGER NOT NULL,
     PRIMARY KEY (chain, token_key, trader_key)
+);
+
+-- Market caps fetched on demand from DexScreener (the drawer's "refresh
+-- mcaps" button). The freshest row per token overrides the alert-derived
+-- figure across position rebuilds, until a newer alert states one.
+CREATE TABLE IF NOT EXISTS mcap_checks (
+    chain     TEXT NOT NULL,
+    token_key TEXT NOT NULL,
+    mcap_usd  REAL,
+    fdv_usd   REAL,
+    ts        INTEGER NOT NULL,
+    PRIMARY KEY (chain, token_key)
+);
+
+-- Tokens the user chose to hide (the bubble's 🚫 button). Blacklisted tokens
+-- are excluded from the graph and feed until restored from the Tokens panel.
+CREATE TABLE IF NOT EXISTS token_blacklist (
+    chain     TEXT NOT NULL,
+    token_key TEXT NOT NULL,
+    symbol    TEXT,
+    ts        INTEGER NOT NULL,
+    PRIMARY KEY (chain, token_key)
 );
 
 -- Tokens whose last holder sold out — the page toasts these as they happen.
@@ -138,13 +161,28 @@ CREATE TABLE IF NOT EXISTS positions (
     invested_usd   REAL NOT NULL DEFAULT 0,
     realized_usd   REAL NOT NULL DEFAULT 0,
     pnl_usd        REAL,
-    entry_mcap_usd REAL,
+    entry_mcap_usd REAL,                   -- mcap at the first buy
+    avg_entry_mcap_usd REAL,               -- buy-weighted average mcap across all buys
     n_events       INTEGER NOT NULL DEFAULT 0,
     first_seen     INTEGER,
     last_seen      INTEGER,
     PRIMARY KEY (chain, token_key, trader_key)
 );
 CREATE INDEX IF NOT EXISTS idx_positions_person ON positions (person);
+
+-- Activity strip history, always at 30-minute resolution (coarser views are
+-- summed from it). events is a derivation that a windowed rebuild trims, so
+-- the per-bucket totals the chart shows are snapshotted here and merged on
+-- every read; a past day stays viewable after its events are gone.
+CREATE TABLE IF NOT EXISTS activity_buckets (
+    day_start INTEGER NOT NULL,        -- epoch of the (client-local) midnight
+    chain     TEXT NOT NULL,           -- 'all' | 'evm' | 'solana' | ...
+    slot      INTEGER NOT NULL,        -- 0..47, half hour within the day
+    tx        INTEGER NOT NULL DEFAULT 0,
+    buys      INTEGER NOT NULL DEFAULT 0,
+    usd       REAL    NOT NULL DEFAULT 0,
+    PRIMARY KEY (day_start, chain, slot)
+);
 """
 
 
@@ -177,6 +215,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
     tcols = {r["name"] for r in conn.execute("PRAGMA table_info(tokens)")}
     if "chain_tag" not in tcols:
         conn.execute("ALTER TABLE tokens ADD COLUMN chain_tag TEXT")
+    if "fdv_usd" not in tcols:
+        conn.execute("ALTER TABLE tokens ADD COLUMN fdv_usd REAL")
+
+    mcols = {r["name"] for r in conn.execute("PRAGMA table_info(mcap_checks)")}
+    if "fdv_usd" not in mcols:
+        conn.execute("ALTER TABLE mcap_checks ADD COLUMN fdv_usd REAL")
+
+    pcols = {r["name"] for r in conn.execute("PRAGMA table_info(positions)")}
+    if "avg_entry_mcap_usd" not in pcols:
+        conn.execute("ALTER TABLE positions ADD COLUMN avg_entry_mcap_usd REAL")
 
 
 @contextmanager

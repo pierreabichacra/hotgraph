@@ -17,6 +17,7 @@ from .base import (
     chain_from_tag,
     find_number_after,
     guess_side,
+    is_quote,
     parse_header,
     token_addr_from_urls,
     token_key_for,
@@ -27,6 +28,19 @@ from .base import (
 
 RE_TICKER = re.compile(r"\(([A-Z0-9]{2,12})\)")
 RE_PCT = re.compile(r"(" + NUM + r")\s*%")
+# Header tags shaped like tickers: "[ETH] [PRI] - (OUT) pnl — S: 1".
+NOT_TICKERS = {"IN", "OUT", "BUY", "SELL", "PRI", "FOMO", "SWAP", "TX", "MC"}
+
+
+def _ticker(text: str) -> str | None:
+    """First parenthesised ticker in the BODY. The header line is skipped:
+    its "(OUT)" / "(IN)" is a direction, not a token — reading it as one
+    keyed ETH->USDC swaps to USDC's contract under the symbol "OUT"."""
+    body = text.split("\n", 1)[1] if "\n" in text else ""
+    for m in RE_TICKER.finditer(body):
+        if m.group(1) not in NOT_TICKERS:
+            return m.group(1)
+    return None
 
 
 @register("generic")
@@ -40,10 +54,16 @@ def parse(text: str, ctx: ParseContext) -> list[Event]:
     if not chain or not tkey:
         return []
 
-    symbol = None
-    m = RE_TICKER.search(text)
-    if m:
-        symbol = m.group(1).upper()
+    symbol = _ticker(text)
+    # The only ticker is a quote asset (ETH->USDC, DAI->USDC): not a token
+    # trade, whatever contract the links point at.
+    if symbol and is_quote(symbol):
+        return []
+    # SENT/RECEIVED/Swap layouts are the tracker parser's. When it produced
+    # nothing for one, every leg was a quote asset — don't invent a token
+    # from the links.
+    if symbol is None and ("SENT" in text.upper() or "SWAP" in text.upper()):
+        return []
 
     token_key = token_key_for(token_addr_from_urls(ctx.urls()), symbol)
     if not token_key:

@@ -4,76 +4,143 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HotGraph</title>
+  <!-- Inline icon: without one the browser requests /favicon.ico and logs a 404. -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='13' fill='%230b1220' stroke='%2322d3ee' stroke-width='2.5'/%3E%3Ccircle cx='24' cy='9' r='5' fill='%23f97316'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="bar">
-    <div class="brand">HotGraph</div>
-    <button id="feedToggle" class="btn">Feed</button>
+  <header class="bar" id="bar">
+    <a class="brand" href="/" title="HotGraph">
+      <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
+        <circle class="ring" cx="16" cy="16" r="13"/>
+        <circle class="sat" cx="24" cy="9" r="5"/>
+      </svg>
+      <span>HotGraph</span>
+    </a>
 
-    <label class="ctl">
-      Chain
-      <select id="chain">
-        <option value="">all</option>
-        <option value="solana">solana</option>
-        <option value="evm">evm</option>
-      </select>
-    </label>
+    <div class="group">
+      <label class="ctl">
+        <span class="cap">Chain</span>
+        <select id="chain">
+          <option value="">all</option>
+          <option value="solana">solana</option>
+          <option value="evm">evm</option>
+        </select>
+      </label>
+      <label class="ctl">
+        <span class="cap">Window</span>
+        <select id="window">
+          <option value="0">all time</option>
+          <option value="1" selected>last 1h</option>
+          <option value="6">last 6h</option>
+          <option value="12">last 12h</option>
+          <option value="24">last 24h</option>
+        </select>
+      </label>
+      <label class="ctl">
+        <span class="cap">Sort</span>
+        <select id="sortBy">
+          <option value="latest" selected>latest actions</option>
+          <option value="mcap">biggest mcap</option>
+          <option value="holders">most holders</option>
+        </select>
+      </label>
+      <label class="ctl">
+        <span class="cap">Top</span>
+        <select id="topN">
+          <option value="50">50</option>
+          <option value="150" selected>150</option>
+          <option value="400">400</option>
+          <option value="0">all</option>
+        </select>
+      </label>
+      <span class="ctl" title="show only selected holders' positions — pick as many as you like">
+        <span class="cap">Holders</span>
+        <button id="userFilterBtn" class="btn">all ▾</button>
+      </span>
+    </div>
 
-    <label class="ctl checkbox">
-      <input type="checkbox" id="includeSold" checked>
-      show sold
-    </label>
+    <div class="group">
+      <label class="ctl">
+        <span class="cap">Min mcap</span>
+        <input type="range" id="minMcap" min="0" max="10" step="0.1" value="0">
+        <input class="val" id="minMcapVal" type="text" inputmode="decimal" value="$0" spellcheck="false"
+               title="type an amount — 250k, 2.5M, 1b or 1000000 — then press Enter">
+      </label>
+      <label class="ctl" title="hide tokens above this market cap — slide fully right for no cap">
+        <span class="cap">Max mcap</span>
+        <input type="range" id="maxMcap" min="0" max="10" step="0.1" value="10">
+        <input class="val" id="maxMcapVal" type="text" inputmode="decimal" value="∞" spellcheck="false"
+               title="type an amount — 250k, 2.5M, 1b or 1000000 — then press Enter; blank = no cap">
+      </label>
+      <label class="ctl">
+        <span class="cap">Min %</span>
+        <input type="range" id="minPct" min="0" max="2" step="0.01" value="0">
+        <span class="val" id="minPctVal">0%</span>
+      </label>
+      <label class="ctl switch" title="include positions that have been fully sold">
+        <input type="checkbox" id="includeSold" checked>
+        <span class="track"></span>
+        <span class="cap">Sold</span>
+      </label>
+    </div>
 
-    <label class="ctl">
-      Min mcap
-      <input type="range" id="minMcap" min="0" max="7" step="0.1" value="0">
-      <span class="val" id="minMcapVal">$0</span>
-    </label>
-
-    <label class="ctl">
-      Min %
-      <input type="range" id="minPct" min="0" max="2" step="0.01" value="0">
-      <span class="val" id="minPctVal">0%</span>
-    </label>
-
-    <label class="ctl">
-      Window
-      <select id="window">
-        <option value="0" selected>all time</option>
-        <option value="1">last 1h</option>
-        <option value="6">last 6h</option>
-        <option value="12">last 12h</option>
-        <option value="24">last 24h</option>
-      </select>
-    </label>
-
-    <label class="ctl">
-      Sort
-      <select id="sortBy">
-        <option value="latest">latest actions</option>
-        <option value="mcap" selected>biggest mcap</option>
-        <option value="holders">most holders</option>
-      </select>
-    </label>
-
-    <label class="ctl">
-      Top
-      <select id="topN">
-        <option value="50">50</option>
-        <option value="150" selected>150</option>
-        <option value="400">400</option>
-        <option value="0">all</option>
-      </select>
-    </label>
-
-    <button id="soundToggle" class="btn" title="play a sound when a new alert arrives">🔔</button>
-    <button id="reload" class="btn">Reload</button>
-    <button id="listToggle" class="btn">Tokens</button>
-    <button id="mergeToggle" class="btn">Merge</button>
     <div class="spacer"></div>
-    <div class="stat" id="sync" title="when alerts were last fetched from Telegram"></div>
-    <div class="stat" id="stat"></div>
+
+    <div class="stats">
+      <div class="stat" id="sync" title="when alerts were last fetched from Telegram"></div>
+      <div class="stat" id="stat"></div>
+    </div>
+
+    <div class="group">
+      <button id="soundToggle" class="btn icon" title="play a sound when a new alert arrives">🔔</button>
+      <span class="ctl split" title="re-fetch alerts this far back from Telegram, re-parse them, and rebuild all positions from just that window">
+        <select id="rebuildDays">
+          <option value="1">1 day</option>
+          <option value="7">7 days</option>
+          <option value="31" selected>31 days</option>
+          <option value="90">90 days</option>
+          <option value="0">all history</option>
+        </select>
+        <button id="rebuildBtn" class="btn">⟳ Rebuild</button>
+      </span>
+      <button id="reload" class="btn" title="re-fetch the graph">Reload</button>
+      <button id="mergeToggle" class="btn" title="merge handles and wallets that belong to one person">Merge</button>
+    </div>
+
+    <!-- Activity strip: one day, 00:00 → 24:00 local, per bucket —
+         transactions (top) and USD volume (bottom). Any past day can be
+         picked; totals are snapshotted server-side so they outlive rebuilds.
+         Click a bucket to list its trades. -->
+    <div class="activity" id="activity">
+      <div class="activity-meta">
+        <button class="day-nav" id="actPrev" title="previous day">‹</button>
+        <input type="date" id="actDate" class="day-pick" title="pick a day">
+        <button class="day-nav" id="actNext" title="next day">›</button>
+        <button class="day-today" id="actToday" title="back to today" hidden>today</button>
+        <select id="actBucket" class="bucket-pick" title="bucket size">
+          <option value="1800">30m</option>
+          <option value="3600">1h</option>
+          <option value="7200">2h</option>
+          <option value="10800">3h</option>
+          <option value="21600">6h</option>
+          <option value="28800">8h</option>
+          <option value="43200">12h</option>
+        </select>
+        <span class="k"><i class="sw tx"></i>tx <b id="actTx">–</b></span>
+        <span class="k"><i class="sw usd"></i>vol <b id="actUsd">–</b></span>
+      </div>
+      <svg id="activitySvg" aria-label="alert activity over the day"></svg>
+      <div class="activity-tip" id="activityTip" hidden></div>
+      <div class="activity-pop" id="activityPop" hidden>
+        <div class="activity-pop-head">
+          <strong id="actPopTitle"></strong>
+          <span class="panel-sub" id="actPopMeta"></span>
+          <button id="actPopClose" class="btn small">✕</button>
+        </div>
+        <div class="activity-pop-list token-list" id="actPopList"></div>
+      </div>
+    </div>
   </header>
 
   <aside id="feedPanel" class="panel left narrow" hidden>
@@ -103,7 +170,14 @@
       <button data-sort="mcap">mcap</button>
       <button data-sort="holders">holders</button>
     </div>
+    <button id="mcapRefresh" class="btn small block" title="fetch the current market cap of every listed token from DexScreener (retries on rate limits)">💲 refresh market caps</button>
+    <button id="verifyAll" class="btn small block" title="check every listed holder's real balance on-chain, for every listed token (public RPCs; one token at a time)">✓ verify holders</button>
     <div id="tokenList" class="token-list"></div>
+    <div class="panel-head groups-head">
+      <strong>Hidden tokens</strong>
+      <span class="panel-sub" id="blacklistMeta"></span>
+    </div>
+    <div id="blacklistList" class="group-list"></div>
   </aside>
 
   <aside id="mergePanel" class="panel" hidden>
@@ -126,21 +200,39 @@
     <div id="groupList" class="group-list"></div>
   </aside>
 
+  <div id="rebuildProgress" class="progress" hidden>
+    <div class="progress-track"><div class="progress-fill"></div></div>
+    <span class="progress-label" id="rebuildLabel"></span>
+  </div>
+
   <svg id="graph"></svg>
 
   <button id="resetZoom" class="map-btn" title="reset zoom — frame the whole graph (double-click the map also works)">⛶</button>
+  <button id="listToggle" class="map-btn wide" title="token list"><span class="k tokens"></span>Tokens</button>
+  <button id="feedToggle" class="map-btn wide left" title="notification feed"><span class="k feed"></span>Feed</button>
+
+  <div id="userFilterMenu" class="dropdown" hidden>
+    <input id="userSearch" class="search" placeholder="search holders…">
+    <div id="userList" class="user-list"></div>
+    <button id="userClear" class="btn small">clear selection</button>
+  </div>
 
   <div id="nodeActions" class="node-actions" hidden>
     <button id="actVerify" title="check every holder's real balance on-chain">✓ verify holders</button>
     <button id="actChart" title="open the GMGN chart in a new tab">📈 chart</button>
+    <button id="actHide" title="hide this token from the graph and feed (restore from the Tokens panel)">🚫 hide</button>
   </div>
 
   <div class="legend">
-    <div><span class="dot token"></span> token — size = market cap</div>
+    <div class="title">Legend</div>
+    <div><span class="dot token"></span> token — size = market cap, colour = chain</div>
     <div><span class="dot person"></span> person — size = % of supply</div>
     <div><span class="dot sold"></span> sold — sized by peak held</div>
     <div><span class="dot dashed"></span> dashed = estimated</div>
   </div>
+
+  <!-- Right-click menu for a feed row: the alert's own links, as quick links -->
+  <div id="linkMenu" class="ctx-menu" hidden></div>
 
   <div id="toasts" class="toasts"></div>
   <div id="tip" class="tip" hidden></div>

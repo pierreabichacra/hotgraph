@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 
 from fastapi import FastAPI, HTTPException
@@ -25,10 +26,12 @@ def graph(
     chain: str | None = None,
     include_sold: bool = True,
     min_mcap: float = 0.0,
+    max_mcap: float = 0.0,    # 0 = no cap
     min_pct: float = 0.0,
     top: int = 150,
     sort: str = "mcap",       # 'mcap' | 'latest' | 'holders'
     since_hours: float = 0,   # 0 = no window; else only tokens with action in it
+    persons: str | None = None,  # comma-separated person labels; None = everyone
 ):
     """Token bubbles with their holder bubbles attached.
 
@@ -54,11 +57,12 @@ def graph(
 
         tok_rows = conn.execute(
             """SELECT t.chain, t.chain_tag, t.token_key, t.symbol, t.name,
-                      t.last_mcap_usd, t.mcap_as_of, t.n_events
+                      t.last_mcap_usd, t.fdv_usd, t.mcap_as_of, t.n_events
                  FROM tokens t
                 WHERE (? IS NULL OR t.chain = ?)
-                  AND COALESCE(t.last_mcap_usd, 0) >= ?""",
-            (chain, chain, min_mcap),
+                  AND COALESCE(t.last_mcap_usd, 0) >= ?
+                  AND (? <= 0 OR COALESCE(t.last_mcap_usd, 0) <= ?)""",
+            (chain, chain, min_mcap, max_mcap, max_mcap),
         ).fetchall()
 
         def _metric(t) -> float:
@@ -80,12 +84,21 @@ def graph(
             cutoff = time.time() - since_hours * 3600
             return bool(st and st["last_action"] and st["last_action"] >= cutoff)
 
+        blocked = {
+            (r["chain"], r["token_key"])
+            for r in conn.execute("SELECT chain, token_key FROM token_blacklist")
+        }
+
         # Fully-exited tokens (nobody tracked holds anymore) are not drawn at
-        # all. Sold positions on still-held tokens keep their grey bubbles.
-        # A time window keeps only tokens someone traded within it — their
-        # full current holder picture stays visible for context.
+        # all, nor are blacklisted ones — filtered before the top-N cut so
+        # hiding a token frees its slot for the next one. Sold positions on
+        # still-held tokens keep their grey bubbles. A time window keeps only
+        # tokens someone traded within it — their full current holder picture
+        # stays visible for context.
         tok_rows = sorted(
-            (t for t in tok_rows if _alive(t) and _in_window(t)),
+            (t for t in tok_rows
+             if (t["chain"], t["token_key"]) not in blocked
+             and _alive(t) and _in_window(t)),
             key=lambda t: -_metric(t),
         )
 
@@ -100,7 +113,7 @@ def graph(
             """SELECT chain, token_key, trader_key, person, trader_handle,
                       pct_supply, peak_pct, bought_pct, sold_pct, status, confidence,
                       invested_usd, realized_usd, pnl_usd, entry_mcap_usd,
-                      n_events, first_seen, last_seen
+                      avg_entry_mcap_usd, n_events, first_seen, last_seen
                  FROM positions
                 WHERE (? IS NULL OR chain = ?)""",
             (chain, chain),
@@ -112,8 +125,14 @@ def graph(
     links: list[dict] = []
     live_tokens: set[tuple[str, str]] = set()
 
+    # Multi-user filter: only these people's bubbles are drawn, and tokens
+    # none of them touched disappear with them (via live_tokens below).
+    sel_persons = {s.strip().lower() for s in (persons or "").split(",") if s.strip()}
+
     for p in pos_rows:
         if (p["chain"], p["token_key"]) not in allowed:
+            continue
+        if sel_persons and (p["person"] or "").lower() not in sel_persons:
             continue
         if not include_sold and p["status"] == "SOLD":
             continue
@@ -145,6 +164,7 @@ def graph(
             "realized_usd": p["realized_usd"],
             "pnl_usd": p["pnl_usd"],
             "entry_mcap_usd": p["entry_mcap_usd"],
+            "avg_entry_mcap_usd": p["avg_entry_mcap_usd"],
             "n_events": p["n_events"],
             "first_seen": p["first_seen"],
             "last_seen": p["last_seen"],
@@ -168,6 +188,7 @@ def graph(
             "token_key": t["token_key"],
             "value": t["last_mcap_usd"] or 0.0,
             "mcap_usd": t["last_mcap_usd"],
+            "fdv_usd": t["fdv_usd"],
             "mcap_as_of": t["mcap_as_of"],
             "resolved": not str(t["token_key"]).startswith("sym:"),
             "n_events": t["n_events"],
@@ -184,6 +205,188 @@ def graph(
         "stats": stats,
         "generated_at": int(time.time()),
     })
+
+
+ACT_BASE = 1800                        # snapshot resolution: 30 minutes
+ACT_BUCKETS = (1800, 3600, 7200, 10800, 21600, 28800, 43200)
+
+
+def _dedup_cte() -> str:
+    """Trades deduplicated by tx hash — two bots reporting the same swap
+    must count as one transaction and one lot of dollars."""
+    return """WITH dedup AS (
+                  SELECT MIN(id) AS id FROM events
+                   WHERE ts >= ? AND ts < ? AND (? IS NULL OR chain = ?)
+                   GROUP BY COALESCE(tx_hash, 'id:' || id)
+              )"""
+
+
+@app.get("/api/activity")
+def activity(start: int, bucket: int = ACT_BASE, chain: str | None = None):
+    """Alert activity over one day: transactions and USD volume per bucket,
+    from `start` (the client's local midnight, epoch seconds) for 24 hours.
+
+    Always computed at 30-minute resolution, merged with the stored snapshot
+    (per slot the larger figure wins — alerts only ever add, while a
+    windowed rebuild can only remove), stored back, and then summed up to
+    the requested bucket size. Any day ever viewed stays viewable.
+    """
+    if bucket not in ACT_BUCKETS:
+        bucket = min(ACT_BUCKETS, key=lambda b: abs(b - bucket))
+    end = start + 86400
+    n = 86400 // ACT_BASE
+    chain_key = chain or "all"
+    with db_session() as conn:
+        rows = conn.execute(
+            _dedup_cte() + """
+               SELECT (e.ts - ?) / ? AS b,
+                      COUNT(*)                       AS tx,
+                      SUM(e.side = 'BUY')            AS buys,
+                      SUM(COALESCE(e.amount_usd, 0)) AS usd
+                 FROM events e JOIN dedup d ON d.id = e.id
+                GROUP BY b""",
+            (start, end, chain, chain, start, ACT_BASE),
+        ).fetchall()
+
+        base = [{"tx": 0, "buys": 0, "usd": 0.0} for _ in range(n)]
+        for r in rows:
+            b = int(r["b"])
+            if 0 <= b < n:
+                base[b] = {"tx": r["tx"], "buys": r["buys"] or 0, "usd": round(r["usd"] or 0.0, 2)}
+
+        for r in conn.execute(
+            "SELECT slot, tx, buys, usd FROM activity_buckets WHERE day_start = ? AND chain = ?",
+            (start, chain_key),
+        ):
+            i = r["slot"]
+            if 0 <= i < n:
+                cur = base[i]
+                base[i] = {"tx": max(cur["tx"], r["tx"]), "buys": max(cur["buys"], r["buys"]),
+                           "usd": max(cur["usd"], r["usd"])}
+
+        conn.executemany(
+            """INSERT INTO activity_buckets (day_start, chain, slot, tx, buys, usd)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(day_start, chain, slot)
+               DO UPDATE SET tx = excluded.tx, buys = excluded.buys, usd = excluded.usd""",
+            [(start, chain_key, i, b["tx"], b["buys"], b["usd"]) for i, b in enumerate(base) if b["tx"]],
+        )
+
+        span = conn.execute(
+            "SELECT MIN(day_start), MAX(day_start) FROM activity_buckets WHERE chain = ?",
+            (chain_key,),
+        ).fetchone()
+
+    k = bucket // ACT_BASE
+    buckets = []
+    for i in range(0, n, k):
+        grp = base[i:i + k]
+        buckets.append({
+            "tx": sum(b["tx"] for b in grp),
+            "buys": sum(b["buys"] for b in grp),
+            "usd": round(sum(b["usd"] for b in grp), 2),
+        })
+
+    return {
+        "start": start,
+        "bucket": bucket,
+        "buckets": buckets,
+        "tx": sum(b["tx"] for b in buckets),
+        "usd": round(sum(b["usd"] for b in buckets), 2),
+        "history": {"first": span[0], "last": span[1]},
+    }
+
+
+@app.get("/api/activity/txs")
+def activity_txs(start: int, end: int, chain: str | None = None, limit: int = 400):
+    """The individual trades inside one bucket of the activity strip, newest
+    first, in the feed's item shape so the page draws them the same way."""
+    limit = max(1, min(limit, 1000))
+    with db_session() as conn:
+        rows = conn.execute(
+            _dedup_cte() + """
+               SELECT e.ts, e.side, e.is_exit, e.token_symbol, e.token_key,
+                      e.chain, e.chain_tag, e.trader_handle, e.trader_key,
+                      e.pct_supply, e.amount_usd, e.mcap_usd, e.source, e.tx_hash, e.raw_id
+                 FROM events e JOIN dedup d ON d.id = e.id
+                ORDER BY e.ts DESC LIMIT ?""",
+            (start, end, chain, chain, limit),
+        ).fetchall()
+    items = [{
+        "ts": r["ts"],
+        "type": r["side"],
+        "is_exit": bool(r["is_exit"]),
+        "symbol": r["token_symbol"] or str(r["token_key"]).replace("sym:", ""),
+        "chain": r["chain"],
+        "token_key": r["token_key"],
+        "chain_tag": r["chain_tag"],
+        "who": r["trader_handle"] or r["trader_key"],
+        "pct_supply": r["pct_supply"],
+        "amount_usd": r["amount_usd"],
+        "mcap_usd": r["mcap_usd"],
+        "source": r["source"],
+        "tx_hash": r["tx_hash"],
+        "raw_id": r["raw_id"],
+    } for r in rows]
+    return {"items": items, "start": start, "end": end}
+
+
+# The hyperlinks inside one captured alert, as (label, url) — the labels are
+# the link texts the bot used ("TX", "GMGN", "DXS", a wallet nickname...).
+_RE_BARE_URL = re.compile(r"https?://[^\s()<>\]]+")
+
+
+def _link_kind(url: str) -> str:
+    u = url.lower()
+    if "/tx/" in u:
+        return "tx"
+    if "/address/" in u or "/account/" in u:
+        return "wallet"
+    if "/block/" in u:
+        return "block"
+    if "/token/" in u and "scan" in u:
+        return "token"
+    if any(h in u for h in ("dexscreener", "gmgn", "defined.fi", "basedbot", "dextools", "birdeye", "photon", "bullx", "axiom")):
+        return "chart"
+    if "t.me/" in u:
+        return "telegram"
+    return "other"
+
+
+@app.get("/api/message/{raw_id}/links")
+def message_links(raw_id: int):
+    from urllib.parse import urlparse
+    from .parsers.base import linked_urls_from_raw_json
+
+    with db_session() as conn:
+        row = conn.execute("SELECT text, raw_json FROM raw_messages WHERE id = ?", (raw_id,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "no such message")
+    text = row["text"] or ""
+    text16 = text.encode("utf-16-le")
+
+    links: list[dict] = []
+    seen: set[str] = set()
+
+    def add(label: str, url: str) -> None:
+        if url in seen:
+            return
+        seen.add(url)
+        host = urlparse(url).netloc.replace("www.", "")
+        label = (label or "").strip()
+        if not label or label.startswith("http"):
+            label = host
+        links.append({"label": label[:40], "url": url, "host": host, "kind": _link_kind(url)})
+
+    # Telegram entities: offsets are UTF-16 code units, hence the byte slicing.
+    for off, ln, url in linked_urls_from_raw_json(row["raw_json"]):
+        label = text16[off * 2:(off + ln) * 2].decode("utf-16-le", "ignore")
+        add(label, url)
+    # Bare URLs typed into the text itself.
+    for m in _RE_BARE_URL.finditer(text):
+        add("", m.group(0).rstrip(".,"))
+
+    return {"raw_id": raw_id, "links": links}
 
 
 @app.get("/api/health")
@@ -227,10 +430,13 @@ def feed(kind: str = "all", limit: int = 100):
             }.get(kind, "1=1")
             for r in conn.execute(
                 f"""SELECT e.ts, e.side, e.is_exit, e.token_symbol, e.token_key,
-                           e.chain_tag, e.trader_handle, e.trader_key,
-                           e.pct_supply, e.amount_usd, e.mcap_usd, e.source
+                           e.chain, e.chain_tag, e.trader_handle, e.trader_key,
+                           e.pct_supply, e.amount_usd, e.mcap_usd, e.source, e.raw_id
                       FROM events e
                      WHERE {side_clause}
+                       AND NOT EXISTS (SELECT 1 FROM token_blacklist b
+                                        WHERE b.chain = e.chain
+                                          AND b.token_key = e.token_key)
                      ORDER BY e.ts DESC LIMIT ?""",
                 (limit,),
             ):
@@ -239,19 +445,22 @@ def feed(kind: str = "all", limit: int = 100):
                     "type": r["side"],
                     "is_exit": bool(r["is_exit"]),
                     "symbol": r["token_symbol"] or str(r["token_key"]).replace("sym:", ""),
+                    "chain": r["chain"],
+                    "token_key": r["token_key"],
                     "chain_tag": r["chain_tag"],
                     "who": r["trader_handle"] or r["trader_key"],
                     "pct_supply": r["pct_supply"],
                     "amount_usd": r["amount_usd"],
                     "mcap_usd": r["mcap_usd"],
                     "source": r["source"],
+                    "raw_id": r["raw_id"],
                 })
 
         if kind in ("other", "all"):
             # Captured messages that produced no trade event. Leading-slash
             # messages are your own bot commands, not notifications.
             for r in conn.execute(
-                """SELECT r.ts, r.source, r.text
+                """SELECT r.id, r.ts, r.source, r.text
                      FROM raw_messages r
                     WHERE NOT EXISTS (SELECT 1 FROM events e WHERE e.raw_id = r.id)
                       AND r.text NOT LIKE '/%'
@@ -265,6 +474,7 @@ def feed(kind: str = "all", limit: int = 100):
                     "title": lines[0][:90] if lines else "",
                     "detail": " · ".join(lines[1:3])[:120],
                     "source": r["source"],
+                    "raw_id": r["id"],
                 })
 
     items.sort(key=lambda x: -x["ts"])
@@ -280,6 +490,23 @@ def feed(kind: str = "all", limit: int = 100):
 # name, stored in person_map; positions are rebuilt so their events combine
 # into a single bubble per token.
 # ---------------------------------------------------------------------------
+
+
+@app.get("/api/persons")
+def persons_list():
+    """Distinct drawable people with position counts — feeds the Users filter."""
+    with db_session() as conn:
+        rows = conn.execute(
+            """SELECT person,
+                      COUNT(*)                AS n_positions,
+                      SUM(status = 'HOLDING') AS n_holding,
+                      MAX(last_seen)          AS last_seen
+                 FROM positions
+                WHERE person IS NOT NULL AND person != ''
+                GROUP BY person
+                ORDER BY n_holding DESC, n_positions DESC"""
+        ).fetchall()
+    return {"persons": [dict(r) for r in rows]}
 
 
 @app.get("/api/traders")
@@ -395,27 +622,85 @@ def people_list():
     }
 
 
+class BlacklistRequest(BaseModel):
+    chain: str
+    token_key: str
+
+
+@app.post("/api/blacklist")
+def blacklist_add(req: BlacklistRequest):
+    """Hide a token from the graph and feed until restored."""
+    with db_session() as conn:
+        tok = conn.execute(
+            "SELECT symbol FROM tokens WHERE chain = ? AND token_key = ?",
+            (req.chain, req.token_key),
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO token_blacklist (chain, token_key, symbol, ts)
+               VALUES (?,?,?,?)
+               ON CONFLICT(chain, token_key) DO UPDATE SET ts=excluded.ts""",
+            (req.chain, req.token_key, tok["symbol"] if tok else None, int(time.time())),
+        )
+    return {"ok": True, "symbol": tok["symbol"] if tok else None}
+
+
+@app.post("/api/blacklist/remove")
+def blacklist_remove(req: BlacklistRequest):
+    with db_session() as conn:
+        n = conn.execute(
+            "DELETE FROM token_blacklist WHERE chain = ? AND token_key = ?",
+            (req.chain, req.token_key),
+        ).rowcount
+    return {"ok": True, "removed": n}
+
+
+@app.get("/api/blacklist")
+def blacklist_list():
+    with db_session() as conn:
+        rows = conn.execute(
+            """SELECT b.chain, b.token_key,
+                      COALESCE(t.symbol, b.symbol) AS symbol, b.ts
+                 FROM token_blacklist b
+                 LEFT JOIN tokens t
+                   ON t.chain = b.chain AND t.token_key = b.token_key
+                ORDER BY b.ts DESC"""
+        ).fetchall()
+    return {"tokens": [dict(r) for r in rows]}
+
+
 class VerifyRequest(BaseModel):
     chain: str
     token_key: str
 
 
-@app.post("/api/verify")
-def verify(req: VerifyRequest):
-    """Check every tracked holder's REAL share of this token against the
-    chain, via a public RPC. Fresh numbers override the alert-derived ones
-    (until a newer trade lands), and positions rebuild immediately."""
+# In-process progress for the running holder verification (single token or
+# the whole drawer), polled by the page's bar. done/total count tokens;
+# wallets_done/wallets_total count wallets within the current token.
+VERIFY_STATE = {
+    "active": False, "done": 0, "total": 0, "symbol": "",
+    "wallets_done": 0, "wallets_total": 0,
+}
+
+
+def _wallet_progress(done, total):
+    VERIFY_STATE["wallets_done"], VERIFY_STATE["wallets_total"] = done, total
+
+
+def _verify_token(chain: str, token_key: str, *, rebuild: bool = True) -> dict:
+    """Check every tracked holder's REAL share of one token against the
+    chain and store the fresh numbers. Raises HTTPException on a problem
+    that applies to the whole token (unknown, no address, RPC down)."""
     import re as _re
     from .verify import verify_holdings
 
     with db_session() as conn:
         tok = conn.execute(
             "SELECT chain_tag, symbol FROM tokens WHERE chain = ? AND token_key = ?",
-            (req.chain, req.token_key),
+            (chain, token_key),
         ).fetchone()
         if tok is None:
             raise HTTPException(404, "unknown token")
-        if str(req.token_key).startswith("sym:"):
+        if str(token_key).startswith("sym:"):
             raise HTTPException(400, "no contract address known for this token")
 
         wallets = [
@@ -423,7 +708,7 @@ def verify(req: VerifyRequest):
             for r in conn.execute(
                 """SELECT DISTINCT trader_key FROM positions
                     WHERE chain = ? AND token_key = ?""",
-                (req.chain, req.token_key),
+                (chain, token_key),
             )
             if _re.fullmatch(r"0x[a-fA-F0-9]{40}", r["trader_key"])
             or _re.fullmatch(r"[1-9A-HJ-NP-Za-km-z]{32,44}", r["trader_key"])
@@ -431,7 +716,9 @@ def verify(req: VerifyRequest):
     if not wallets:
         raise HTTPException(400, "no full wallet addresses to check for this token")
 
-    checks, fatal = verify_holdings(req.chain, tok["chain_tag"], req.token_key, wallets)
+    VERIFY_STATE.update(symbol=tok["symbol"] or "", wallets_done=0, wallets_total=len(wallets))
+    checks, fatal = verify_holdings(
+        chain, tok["chain_tag"], token_key, wallets, progress=_wallet_progress)
     if fatal:
         raise HTTPException(502, fatal)
 
@@ -447,9 +734,9 @@ def verify(req: VerifyRequest):
                    VALUES (?,?,?,?,?,?)
                    ON CONFLICT(chain, token_key, trader_key)
                    DO UPDATE SET pct=excluded.pct, balance=excluded.balance, ts=excluded.ts""",
-                (req.chain, req.token_key, c.trader_key, c.pct, c.balance, now),
+                (chain, token_key, c.trader_key, c.pct, c.balance, now),
             )
-    if ok:
+    if ok and rebuild:
         positions_mod.run()
 
     return {
@@ -464,18 +751,248 @@ def verify(req: VerifyRequest):
     }
 
 
+@app.post("/api/verify")
+def verify(req: VerifyRequest):
+    """Check every tracked holder's REAL share of this token against the
+    chain, via a public RPC. Fresh numbers override the alert-derived ones
+    (until a newer trade lands), and positions rebuild immediately."""
+    if VERIFY_STATE["active"]:
+        raise HTTPException(409, "a holder verification is already running")
+    VERIFY_STATE.update(active=True, done=0, total=1, symbol="",
+                        wallets_done=0, wallets_total=0)
+    try:
+        return _verify_token(req.chain, req.token_key)
+    finally:
+        VERIFY_STATE.update(active=False)
+
+
+class VerifyAllRequest(BaseModel):
+    tokens: list[dict]   # [{chain, token_key}, ...] — address-keyed only
+
+
+@app.get("/api/verify/status")
+def verify_status():
+    return VERIFY_STATE
+
+
+@app.post("/api/verify/all")
+def verify_all(req: VerifyAllRequest):
+    """Verify every holder of every given token on-chain, one token after
+    another, then rebuild positions once at the end. Per-token failures
+    (no wallets, RPC down) are reported, not fatal. Sync route so the RPC
+    calls run in a worker thread and the status endpoint stays live."""
+    if VERIFY_STATE["active"]:
+        raise HTTPException(409, "a holder verification is already running")
+
+    wanted = [
+        (t.get("chain"), str(t.get("token_key")))
+        for t in req.tokens
+        if t.get("chain") and t.get("token_key")
+        and not str(t.get("token_key")).startswith("sym:")
+    ]
+    if not wanted:
+        raise HTTPException(400, "no address-keyed tokens to verify")
+
+    VERIFY_STATE.update(active=True, done=0, total=len(wanted), symbol="",
+                        wallets_done=0, wallets_total=0)
+    results, verified_any = [], False
+    try:
+        for i, (chain, key) in enumerate(wanted):
+            try:
+                out = _verify_token(chain, key, rebuild=False)
+                verified_any = verified_any or out["verified"] > 0
+                results.append({
+                    "chain": chain, "token_key": key, "symbol": out["symbol"],
+                    "checked": out["checked"], "verified": out["verified"],
+                })
+            except HTTPException as e:
+                results.append({
+                    "chain": chain, "token_key": key, "symbol": None,
+                    "checked": 0, "verified": 0, "error": str(e.detail),
+                })
+            VERIFY_STATE["done"] = i + 1
+    finally:
+        VERIFY_STATE.update(active=False)
+
+    if verified_any:
+        positions_mod.run()
+
+    return {
+        "ok": True,
+        "requested": len(wanted),
+        "tokens_verified": sum(1 for r in results if r["verified"]),
+        "wallets_checked": sum(r["checked"] for r in results),
+        "wallets_verified": sum(r["verified"] for r in results),
+        "failed": sum(1 for r in results if r.get("error")),
+        "results": results,
+    }
+
+
+# Set by hotgraph.run so API-triggered backfills reuse the one live Telethon
+# client. Opening a second client on the same session file here would trigger
+# AUTH_KEY_DUPLICATED — never do that. Stays None under standalone uvicorn.
+tg_client = None
+
+# In-process progress for the running rebuild, polled by /api/rebuild/status.
+# fetch: done = messages scanned on Telegram (total unknown -> indeterminate);
+# parse: done/total = messages parsed; positions: quick final phase.
+REBUILD_STATE = {"active": False, "phase": None, "done": 0, "total": None, "detail": ""}
+
+
+class RebuildRequest(BaseModel):
+    days: float | None = None   # None or 0 = all captured history
+
+
+@app.get("/api/rebuild/status")
+def rebuild_status():
+    return REBUILD_STATE
+
+
+class McapRequest(BaseModel):
+    tokens: list[dict]   # [{chain, token_key}, ...] — address-keyed only
+
+
+# In-process progress for the running mcap refresh, polled by the page's bar.
+MCAP_STATE = {"active": False, "done": 0, "total": 0}
+
+
+@app.get("/api/mcaps/status")
+def mcaps_status():
+    return MCAP_STATE
+
+
+@app.post("/api/mcaps")
+def refresh_mcaps(req: McapRequest):
+    """Fetch current market caps for the given tokens from DexScreener and
+    store them (mcap_checks + tokens), freshest-wins across rebuilds.
+    Sync route: FastAPI runs it in a worker thread, so the retry backoff and
+    pacing sleeps inside fetch_mcaps never block the event loop (and the
+    status endpoint stays answerable while this runs)."""
+    from .mcap import fetch_mcaps
+
+    if MCAP_STATE["active"]:
+        raise HTTPException(409, "a market-cap refresh is already running")
+
+    wanted = [
+        (t.get("chain"), str(t.get("token_key")))
+        for t in req.tokens
+        if t.get("chain") and t.get("token_key")
+        and not str(t.get("token_key")).startswith("sym:")
+    ]
+    if not wanted:
+        raise HTTPException(400, "no address-keyed tokens to refresh")
+
+    MCAP_STATE.update(active=True, done=0, total=len(wanted))
+    try:
+        def prog(done, total):
+            MCAP_STATE["done"], MCAP_STATE["total"] = done, total
+
+        caps, failed = fetch_mcaps([k for _, k in wanted], progress=prog)
+    finally:
+        MCAP_STATE.update(active=False)
+
+    now = int(time.time())
+    updated = 0
+    with db_session() as conn:
+        for chain, key in wanted:
+            hit = caps.get(key)
+            if hit is None:
+                continue
+            cap, fdv = hit
+            updated += 1
+            conn.execute(
+                """INSERT INTO mcap_checks (chain, token_key, mcap_usd, fdv_usd, ts)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(chain, token_key)
+                   DO UPDATE SET mcap_usd=excluded.mcap_usd, fdv_usd=excluded.fdv_usd,
+                                 ts=excluded.ts""",
+                (chain, key, cap, fdv, now),
+            )
+            conn.execute(
+                "UPDATE tokens SET last_mcap_usd=?, fdv_usd=?, mcap_as_of=? WHERE chain=? AND token_key=?",
+                (cap, fdv, now, chain, key),
+            )
+
+    return {
+        "ok": True,
+        "requested": len(wanted),
+        "updated": updated,
+        "unknown": len(wanted) - updated - len(failed),
+        "failed": len(failed),
+    }
+
+
 @app.post("/api/rebuild")
-def rebuild():
-    """Re-parse everything and rebuild positions (after a parser fix)."""
+async def rebuild(req: RebuildRequest | None = None):
+    """Rebuild events + positions, optionally bounded to the last N days.
+
+    With a timeframe and a connected Telegram client, first backfills any
+    alerts in that window that were never captured (dedup makes this cheap),
+    then re-parses just that window so the whole graph reflects it.
+    """
+    import asyncio
     from . import ingest as ingest_mod
-    ingest_mod.run()
-    summary = positions_mod.run()
-    return {"ok": True, **summary}
+    from .config import load_sources
+
+    if REBUILD_STATE["active"]:
+        raise HTTPException(409, "a rebuild is already running")
+
+    days = req.days if req and req.days and req.days > 0 else None
+    since_ts = time.time() - days * 86400 if days else None
+
+    REBUILD_STATE.update(active=True, phase="fetch", done=0, total=None, detail="")
+    try:
+        fetched = scanned = 0
+        if tg_client is not None and since_ts is not None:
+            from .capture import backfill_one
+            with db_session() as conn:
+                for src in (s for s in load_sources() if s.enabled):
+                    REBUILD_STATE["detail"] = src.id
+
+                    def prog(seen, _new, base=scanned):
+                        REBUILD_STATE["done"] = base + seen
+
+                    try:
+                        new, seen = await backfill_one(
+                            tg_client, conn, src, None, since_ts, progress=prog
+                        )
+                    except Exception:
+                        continue
+                    fetched += new
+                    scanned += seen
+
+        REBUILD_STATE.update(phase="parse", done=0, total=None, detail="")
+
+        def iprog(done, total):
+            REBUILD_STATE["done"] = done
+            REBUILD_STATE["total"] = total
+
+        # Threads so the event loop stays free to answer the progress polls
+        # (and live Telegram updates) while SQLite churns.
+        await asyncio.to_thread(ingest_mod.run, None, 0, since_ts, iprog)
+        REBUILD_STATE.update(phase="positions", done=0, total=None)
+        summary = await asyncio.to_thread(positions_mod.run)
+        return {"ok": True, "fetched": fetched, "days": days, **summary}
+    finally:
+        REBUILD_STATE.update(active=False, phase=None, done=0, total=None, detail="")
 
 
 @app.get("/")
 def index():
     return FileResponse(WEB_DIR / "index.html")
+
+
+@app.middleware("http")
+async def _no_stale_frontend(request, call_next):
+    """The page and its script are edited in place. Without this a normal
+    reload (F5) revalidates only index.html and keeps app.js from the
+    heuristic cache — new buttons appear with no handlers behind them.
+    ETags make the forced revalidation a cheap 304."""
+    resp = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")

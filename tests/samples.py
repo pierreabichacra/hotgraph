@@ -166,4 +166,213 @@ TX | BSD | DFI | GMGN | DXS | $5.4K | 23h""",
             "pnl_x": 0.58,
         },
     },
+    # ---- must produce NOTHING (expect=None) ---------------------------------
+    # These all carry a USDC link, and used to become trades of a token called
+    # "OUT"/"IN" keyed to USDC's contract — the header tag read as a ticker.
+    {
+        "id": "eth_quote_swap_none",
+        "chain_hint": None,
+        "text": """[ETH] [PRI] - (OUT) pnl — S: 1
+Method: execute
+➡️ SENT: 0.5 ETH
+⬅️ RECEIVED: 1965.45 USD Coin (USDC)
+TX""",
+        "expect": None,
+    },
+    {
+        "id": "eth_stable_swap_none",
+        "chain_hint": None,
+        "text": """[ETH] [PRI] - (IN) ethFoundation — S: 1
+From: 0x2...Ec8
+Method: execTransaction
+➡️ SENT: 6008547.99 Dai Stablecoin (DAI) 0.13%
+⬅️ RECEIVED: 6008547.99 USD Coin (USDC) 0.01%
+TX""",
+        "expect": None,
+    },
+    {
+        "id": "eth_transfer_none",
+        "chain_hint": None,
+        # Plain transfers: "ETH To: 0xe...B66" is still ETH, not a token sale.
+        "text": """[ETH] [PRI] - (OUT) qerr — S: 1
+Method: 0xb9303701
+➡️ SENT: 0.001 ETH To: 0xe...B66
+➡️ SENT: 46052.55 USD Coin (USDC) To: 0xe...B66
+TX""",
+        "expect": None,
+    },
+    {
+        "id": "bsc_fee_only_none",
+        "chain_hint": None,
+        "text": """[BSC] - (OUT) pnl — S: 1
+➡️ SENT: 0.14 BNB To: Maestro: Fees
+TX""",
+        "expect": None,
+    },
+    {
+        "id": "eth_bridge_route_none",
+        "chain_hint": None,
+        # Every hop is a quote/stable asset — a bridge, not a token trade.
+        "text": """[ETH] buttersss — S: 1
+🌉 Bridge (deBridge)
+➡️ SENT: 4 ETH (~$7.7K) To: 🌉 deBridge: Crosschain Forwarder
+0xB...973 ➡️ SENT: 12.00 Wrapped Ether (WETH) To: 0x9...3E3
+0x6...F86 ➡️ SENT: 23.1K Tether USD (USDT) To: 0x9...3E3
+0x0...A90 ➡️ SENT: 23.1K USDS Stablecoin (USDS) To: 0x1...f32
+DEAD Address ➡️ SENT: 15.4K Dai Stablecoin (DAI) To: 0xA...98c
+0x3...341 ➡️ SENT: 15.4K USD Coin (USDC) To: 🌉 deBridge: Crosschain Forwarder
+TX | $6.53B | 6mo""",
+        "expect": None,
+    },
+    # ---- multi-leg: fee/hops first, the real token later --------------------
+    {
+        "id": "bsc_multileg_sell",
+        "chain_hint": None,
+        "text": """[BSC] - (OUT) mou3ak — S: 1
+Method: 0xb2ee847c
+➡️ SENT: 0.005 BNB To: 0xc...4f8
+0x1...24E ➡️ SENT: 0.00 Wrapped BNB (WBNB) To: 0xE...A9c
+0xE...A9c ➡️ SENT: 1334.98 潜龙勿用 (潜龙勿用) To: 0xc...4f8
+TX — DEXT — DFI — DEXSCR
+MC: $2,294,959 - Age: 15 hours ago""",
+        "expect": {
+            "chain": "evm",
+            "side": "SELL",
+            "trader_key": "mou3ak",
+            "token_symbol": "潜龙勿用",
+            "token_name": "潜龙勿用",
+            "amount_tokens": 1334.98,
+            "mcap_usd": 2_294_959.0,
+        },
+    },
+    {
+        "id": "bsc_from_counterparty_buy",
+        "chain_hint": None,
+        # "From: 0x6...c5b" after the leg must not eat the "8.19%".
+        "text": """[BSC] - (OUT) buttersss — S: 1
+Method: 0xaa5d82c3
+⬅️ RECEIVED: 81940498.93 WAGMI (GMI) 8.19% From: 0x6...c5b
+➡️ SENT: NFT #4563198 Pancake V3 Positions NFT-V1 (PCS-V3-POS) To: 0x6...c5b
+TX — DEXT — DFI — DEXSCR
+MC: $82,786 - Age: 8 months ago""",
+        "expect": {
+            "chain": "evm",
+            "side": "BUY",
+            "token_symbol": "GMI",
+            "token_name": "WAGMI",
+            "pct_supply": 8.19,
+            "amount_tokens": 81940498.93,
+            "mcap_usd": 82_786.0,
+        },
+    },
+    # ---- Layout C: several wallets in one alert -----------------------------
+    # As pasted from Telegram with "copy with links": the URLs sit inline.
+    {
+        "id": "bsc_multi_wallet_sold_inline_links",
+        "chain_hint": None,
+        "text": """🔴 [BSC] 2 wallets sold 豆豆 (https://bscscan.com/token/0x5fF8Aaae467b86366ce4a9A5cE1621E060837777) in #118002792 (https://bscscan.com/block/118002792)
+
+1. PGmgn (https://bscscan.com/address/0x07fDD1E22CF245f8c09cEc01157beF6dA6879be6) | TX (https://bscscan.com/tx/0x0257f8709e7a2aa328f04bc0000d011d37cfc94611e5ad55415b27e376f26ca0)
+├ 🔴 10.01M 酸奶豆糕 (豆豆) (https://bscscan.com/token/0x5fF8Aaae467b86366ce4a9A5cE1621E060837777) 1.00%
+├ to: 0.08 BNB (~$55.50)
+└ 📉 PnL -0.12 BNB (0.39x) | ⏱️ 3h
+
+2. P (https://bscscan.com/address/0xbA08016b34434ce9A36631018fE5Efa0BB8C3537) | TX (https://bscscan.com/tx/0x14b9fa08438b9bb37b01bb7fd13ecbf8c9e35d1329f9fb913960318bbb908046)
+├ 🔴 9.95M 酸奶豆糕 (豆豆) (https://bscscan.com/token/0x5fF8Aaae467b86366ce4a9A5cE1621E060837777) 0.99%
+├ to: 0.078 BNB (~$53.94)
+└ 📉 PnL -0.12 BNB (0.38x) | ⏱️ 3h
+
+Σ 0.16 BNB (~$109.44) ← 19.96M (2.00%)
+BSD (https://basedbot.app/r/refrewards/token/bsc/0x5ff8aaae467b86366ce4a9a5ce1621e060837777) | DFI (https://www.defined.fi/bsc/0x5ff8aaae467b86366ce4a9a5ce1621e060837777) | GMGN (https://gmgn.ai/bsc/token/0x5ff8aaae467b86366ce4a9a5ce1621e060837777?ref=d4l63SNN) | DXS (https://dexscreener.com/bsc/0x5ff8aaae467b86366ce4a9a5ce1621e060837777) | $5.8K | 3h""",
+        "expect_all": [
+            {
+                "chain": "evm",
+                "chain_tag": "BSC",
+                "side": "SELL",
+                "trader_key": "0x07fdd1e22cf245f8c09cec01157bef6da6879be6",
+                "trader_handle": "pgmgn",
+                "wallet_addr": "0x07fDD1E22CF245f8c09cEc01157beF6dA6879be6",
+                "token_key": "0x5fF8Aaae467b86366ce4a9A5cE1621E060837777",
+                "token_symbol": "豆豆",
+                "token_name": "酸奶豆糕",
+                "amount_tokens": 10_010_000.0,
+                "pct_supply": 1.00,
+                "amount_usd": 55.50,
+                "pnl_x": 0.39,
+                "mcap_usd": 5_800.0,
+                "tx_hash": "0x0257f8709e7a2aa328f04bc0000d011d37cfc94611e5ad55415b27e376f26ca0",
+            },
+            {
+                "side": "SELL",
+                "trader_key": "0xba08016b34434ce9a36631018fe5efa0bb8c3537",
+                "trader_handle": "p",
+                "token_key": "0x5fF8Aaae467b86366ce4a9A5cE1621E060837777",
+                "amount_tokens": 9_950_000.0,
+                "pct_supply": 0.99,
+                "amount_usd": 53.94,
+                "pnl_x": 0.38,
+                "mcap_usd": 5_800.0,
+                "tx_hash": "0x14b9fa08438b9bb37b01bb7fd13ecbf8c9e35d1329f9fb913960318bbb908046",
+            },
+        ],
+    },
+    # As captured live: link targets live in the message entities (UTF-16
+    # offsets — the leading emoji counts as 2), never in the visible text.
+    {
+        "id": "bsc_multi_wallet_bought_entities",
+        "chain_hint": None,
+        "text": """🟢 [BSC] 2 wallets bought 大圣 in #118000583
+
+1. PGmgn | TX
+├ 🟢 0.05 BNB (~$34.75)
+└ to: 4.12M What if (大圣) 0.41%
+
+2. P | TX
+├ 🟢 0.05 BNB (~$34.75)
+└ to: 4.07M What if (大圣) 0.41%
+
+Σ 0.1 BNB (~$69.51) → 8.19M (0.82%)
+BSD | DFI | GMGN | DXS | $10.9K | 1m""",
+        "raw_json": {
+            "entities": [
+                {"_": "MessageEntityTextUrl", "offset": 26, "length": 2, "url": "https://bscscan.com/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+                {"_": "MessageEntityTextUrl", "offset": 32, "length": 10, "url": "https://bscscan.com/block/118000583"},
+                {"_": "MessageEntityTextUrl", "offset": 47, "length": 5, "url": "https://bscscan.com/address/0x07fDD1E22CF245f8c09cEc01157beF6dA6879be6"},
+                {"_": "MessageEntityTextUrl", "offset": 55, "length": 2, "url": "https://bscscan.com/tx/0x96926cb361fd6463abbd5243693e24e6d32c0c2437a750b5e9026d9056dafa5e"},
+                {"_": "MessageEntityTextUrl", "offset": 94, "length": 12, "url": "https://bscscan.com/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+                {"_": "MessageEntityTextUrl", "offset": 117, "length": 1, "url": "https://bscscan.com/address/0xbA08016b34434ce9A36631018fE5Efa0BB8C3537"},
+                {"_": "MessageEntityTextUrl", "offset": 121, "length": 2, "url": "https://bscscan.com/tx/0xab2800f387b4a9652d8fea38dd5fd7c106ebd401a89ff655514bd31fb7ca09f1"},
+                {"_": "MessageEntityTextUrl", "offset": 160, "length": 12, "url": "https://bscscan.com/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+                {"_": "MessageEntityTextUrl", "offset": 216, "length": 3, "url": "https://basedbot.app/r/refrewards/token/bsc/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+                {"_": "MessageEntityTextUrl", "offset": 222, "length": 3, "url": "https://www.defined.fi/bsc/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+                {"_": "MessageEntityTextUrl", "offset": 228, "length": 4, "url": "https://gmgn.ai/bsc/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777?ref=d4l63SNN"},
+                {"_": "MessageEntityTextUrl", "offset": 235, "length": 3, "url": "https://dexscreener.com/bsc/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+            ]
+        },
+        "expect_all": [
+            {
+                "chain": "evm",
+                "side": "BUY",
+                "trader_key": "0x07fdd1e22cf245f8c09cec01157bef6da6879be6",
+                "trader_handle": "pgmgn",
+                "token_key": "0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777",
+                "token_symbol": "大圣",
+                "token_name": "What if",
+                "amount_tokens": 4_120_000.0,
+                "pct_supply": 0.41,
+                "amount_usd": 34.75,
+                "mcap_usd": 10_900.0,
+                "tx_hash": "0x96926cb361fd6463abbd5243693e24e6d32c0c2437a750b5e9026d9056dafa5e",
+            },
+            {
+                "side": "BUY",
+                "trader_key": "0xba08016b34434ce9a36631018fe5efa0bb8c3537",
+                "trader_handle": "p",
+                "amount_tokens": 4_070_000.0,
+                "pct_supply": 0.41,
+                "amount_usd": 34.75,
+                "tx_hash": "0xab2800f387b4a9652d8fea38dd5fd7c106ebd401a89ff655514bd31fb7ca09f1",
+            },
+        ],
+    },
 ]

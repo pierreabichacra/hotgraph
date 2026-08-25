@@ -48,11 +48,19 @@ CHAIN_TAGS = {
 # trusting the header tag (an alert tagged "(OUT)" can still be a buy).
 QUOTE_SYMBOLS = {
     "SOL", "WSOL", "ETH", "WETH", "BNB", "WBNB", "MATIC", "WMATIC", "AVAX",
+    "HYPE", "WHYPE",
     "USDC", "USDT", "DAI", "BUSD", "USDE", "FDUSD", "USD COIN", "TETHER",
-    "USDC.E", "WBTC", "CBBTC",
+    "USDC.E", "USDT0", "USDG", "GLOBAL DOLLAR", "WBTC", "CBBTC",
+    "USDS", "USDS STABLECOIN", "USD1", "PYUSD", "TUSD", "TETHER USD",
+    "DAI STABLECOIN",
 }
 
-STABLES = {"USDC", "USDT", "DAI", "BUSD", "FDUSD", "USD COIN", "TETHER", "USDC.E"}
+STABLES = {
+    "USDC", "USDT", "DAI", "BUSD", "FDUSD", "USD COIN", "TETHER",
+    "USDC.E", "USDT0", "USDG", "GLOBAL DOLLAR",
+    "USDS", "USDS STABLECOIN", "USD1", "PYUSD", "TUSD", "TETHER USD",
+    "DAI STABLECOIN",
+}
 
 
 def chain_from_tag(tag: str | None) -> str | None:
@@ -117,6 +125,19 @@ class ParseContext:
         if cached is None:
             cached = urls_from_raw_json(self.raw_json)
             self.meta["_urls"] = cached
+        return cached
+
+    def linked_urls(self) -> list[tuple[int, int, str]]:
+        """Hyperlinks WITH their position: (utf16_offset, utf16_length, url).
+
+        Needed when one message reports several trades — each numbered
+        section carries its own wallet and TX link, and only the position
+        says which section a link belongs to.
+        """
+        cached = self.meta.get("_linked_urls")
+        if cached is None:
+            cached = linked_urls_from_raw_json(self.raw_json)
+            self.meta["_linked_urls"] = cached
         return cached
 
 
@@ -228,6 +249,54 @@ def urls_from_raw_json(raw_json: str | None) -> list[str]:
 
     walk(data)
     return out
+
+
+def linked_urls_from_raw_json(raw_json: str | None) -> list[tuple[int, int, str]]:
+    """Text-url entities as (offset, length, url), in message order.
+
+    Telegram measures offsets in UTF-16 code units (an emoji counts 2) — see
+    `utf16_offset` to compare against Python string indices.
+    """
+    if not raw_json:
+        return []
+    try:
+        data = json.loads(raw_json)
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    out: list[tuple[int, int, str]] = []
+    for ent in data.get("entities") or []:
+        if not isinstance(ent, dict):
+            continue
+        url = ent.get("url")
+        off, ln = ent.get("offset"), ent.get("length")
+        if isinstance(url, str) and url.startswith("http") and isinstance(off, int) and isinstance(ln, int):
+            out.append((off, ln, url))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def utf16_offset(text: str, index: int) -> int:
+    """UTF-16 code-unit offset of Python string index `index`."""
+    return len(text[:index].encode("utf-16-le")) // 2
+
+
+# Links pasted inline, as Telegram's "copy with links" writes them:
+# "PGmgn (https://bscscan.com/address/0x...)". Both the parenthesised and the
+# bare form are recognised so a forwarded/exported alert parses like a live one.
+RE_INLINE_URL = re.compile(r"\s*\(?(https?://[^\s()]+)\)?")
+
+
+def strip_inline_urls(text: str) -> tuple[str, list[str]]:
+    """(text without inline links, the links in order)."""
+    found: list[str] = []
+
+    def take(m: re.Match) -> str:
+        found.append(m.group(1))
+        return ""
+
+    return RE_INLINE_URL.sub(take, text), found
 
 
 _ADDR = r"(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})"
@@ -356,7 +425,8 @@ def token_key_for(addr: str | None, symbol: str | None, name: str | None = None)
 # Header: "[SOL] [BUY] - (FOMO BUY) @loganlim_x — S: 1"
 # --------------------------------------------------------------------------
 
-RE_CHAIN_TAG = re.compile(r"^\s*\[([A-Za-z]+)\]")
+# A status emoji may precede the tag: "🔴 [BSC] 2 wallets sold ..."
+RE_CHAIN_TAG = re.compile(r"^\s*(?:[^\w\s\[\]]{1,3}\s*)?\[([A-Za-z]+)\]")
 # Score can be a number or an emoji ("S: 1", "S: ❌").
 RE_SCORE_TAIL = re.compile(r"[—–-]\s*S\s*:\s*\S+\s*$")
 
@@ -469,6 +539,11 @@ RE_LEG = re.compile(
     r"^\s*(?P<amt>" + NUM + r")\s*(?P<suf>[KMBTkmbt])?\s+"
     r"(?P<rest>.+?)\s*$"
 )
+# Transfer legs name the counterparty: "0.001 ETH To: 0xe...B66",
+# "5.03 Wrapped Ether (WETH) From: 0x7...6d8", "0.14 BNB To: Maestro: Fees".
+# Case-sensitive on purpose — the bot capitalises these, and a lowercase
+# "to:" is Layout B's own swap line, which never reaches parse_leg.
+RE_COUNTERPARTY = re.compile(r"\s+(?:To|From)\s*:\s.*$")
 
 
 def parse_leg(text: str) -> Leg | None:
@@ -479,10 +554,13 @@ def parse_leg(text: str) -> Leg | None:
         '1 ETH'                                   -> 1, ETH, ETH
         '31.63M CHOUCHOU (CHOUCHOU) 3.16%'        -> 31630000, CHOUCHOU, 3.16
         '0.23 BNB (~$160.32)'                     -> 0.23, BNB, usd 160.32
+        '0.001 ETH To: 0xe...B66'                 -> 0.001, ETH, ETH
     """
     if not text:
         return None
-    text = text.strip()
+    # Drop the counterparty first, or "ETH To: 0xe...B66" stops looking
+    # like ETH and the transfer gets mistaken for a token sale.
+    text = RE_COUNTERPARTY.sub("", text.strip())
     m = RE_LEG.match(text)
     if not m:
         return None
