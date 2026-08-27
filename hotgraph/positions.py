@@ -125,12 +125,17 @@ def run() -> dict:
         # so grouping by trader_key would destroy the temporal order the
         # running-balance math depends on.
         rows = conn.execute(
-            """SELECT chain, token_key, trader_key, trader_handle, side, is_exit,
+            """SELECT id, chain, token_key, trader_key, trader_handle, side, is_exit,
                       amount_usd, pct_supply, holds_pct, mcap_usd, pnl_usd,
                       tx_hash, ts
                  FROM events
                 ORDER BY chain, token_key, ts ASC, id ASC"""
         ).fetchall()
+        # Per sell event: (share of the bag it sold, % of supply left after).
+        # Written back to events at the end so the feed can say "sold 40% of
+        # the bag" vs "EXIT" without trusting the bot's wording.
+        sell_facts: dict[int, tuple[float | None, float]] = {}
+        dup_facts: dict[tuple, tuple[float | None, float]] = {}
         # id breaks ts ties: a transfer's OUT and IN halves share a timestamp
         # and must apply in that order once both wallets belong to one person.
 
@@ -167,17 +172,23 @@ def run() -> dict:
             # count it twice. The tx hash is authoritative; without one, an
             # identical (side, pct) within 3 minutes is treated as the same
             # trade seen through a second bot.
+            dup_id = None
             if r["tx_hash"]:
-                tx_id = key + (r["side"], r["tx_hash"])
-                if tx_id in seen_tx:
+                dup_id = key + (r["side"], r["tx_hash"])
+                if dup_id in seen_tx:
+                    # The same sell seen through a second bot: same facts.
+                    if dup_id in dup_facts:
+                        sell_facts[r["id"]] = dup_facts[dup_id]
                     continue
-                seen_tx.add(tx_id)
+                seen_tx.add(dup_id)
             elif r["pct_supply"] is not None:
-                near_id = key + (r["side"], round(r["pct_supply"], 6))
-                last = dup_window.get(near_id)
+                dup_id = key + (r["side"], round(r["pct_supply"], 6))
+                last = dup_window.get(dup_id)
                 if last is not None and abs(r["ts"] - last) <= 180:
+                    if dup_id in dup_facts:
+                        sell_facts[r["id"]] = dup_facts[dup_id]
                     continue
-                dup_window[near_id] = r["ts"]
+                dup_window[dup_id] = r["ts"]
 
             st = acc.get(key)
             if st is None:
@@ -226,6 +237,7 @@ def run() -> dict:
             # changing pockets, which after a merge nets out to nothing.
             side = r["side"]
             inbound = side in ("BUY", "TRANSFER_IN")
+            held_before = st["running"]
 
             # An earlier Exit closed the position, but buying (or receiving)
             # again reopens it.
@@ -278,6 +290,25 @@ def run() -> dict:
                 # The bot said the position is closed. Trust it over the sums.
                 st["exited"] = True
                 st["running"] = 0.0
+
+            if side == "SELL":
+                # What this sell did to the bag: the fraction it moved (when
+                # we knew the bag before it) and what is left after — the
+                # bot's own Holds/Exit statement already applied above.
+                frac = None
+                if pct is not None and held_before > DUST_PCT:
+                    frac = min(1.0, pct / held_before)
+                if st["running"] <= DUST_PCT:
+                    frac = 1.0 if frac is not None or r["is_exit"] or r["holds_pct"] is not None else frac
+                facts = (frac, round(st["running"], 6))
+                sell_facts[r["id"]] = facts
+                if dup_id is not None:
+                    dup_facts[dup_id] = facts
+
+        conn.executemany(
+            "UPDATE events SET sold_frac = ?, remaining_pct = ? WHERE id = ?",
+            [(f, rem, eid) for eid, (f, rem) in sell_facts.items()],
+        )
 
         symbol_keyed = {
             (row["chain"], row["token_key"])

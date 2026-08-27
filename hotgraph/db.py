@@ -65,6 +65,11 @@ CREATE TABLE IF NOT EXISTS events (
     pnl_x         REAL,
     tx_hash       TEXT,                    -- from the TX link; enables cross-bot dedup
     counterparty  TEXT,                    -- transfers: the other wallet (see parsers.base)
+    -- Filled in by positions.run() from the replayed running balance, so a
+    -- sell can be told apart as "part of the bag" vs "all of it" even when the
+    -- bot's text doesn't say (bots A/B never print Exit):
+    sold_frac     REAL,                    -- sells: share of the bag this trade sold, 0..1
+    remaining_pct REAL,                    -- sells: % of supply still held afterwards
     ts            INTEGER NOT NULL,
     UNIQUE (raw_id, trader_key, token_key, side)
 );
@@ -222,6 +227,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("holds_pct", "REAL"),
         ("holds_amount", "REAL"),
         ("counterparty", "TEXT"),
+        ("sold_frac", "REAL"),
+        ("remaining_pct", "REAL"),
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col} {decl}")

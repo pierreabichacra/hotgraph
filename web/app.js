@@ -2654,10 +2654,18 @@ function feedRowHtml(it) {
     ? `<span class="pill buy">BUY</span>`
     : xferOut ? `<span class="pill xfer" title="tokens moved to another wallet — not a sale">MOVE →</span>`
     : xferIn ? `<span class="pill xfer" title="tokens received from another wallet — not a buy">← MOVE</span>`
-    : `<span class="pill sell">${it.is_exit ? "EXIT" : "SELL"}</span>`;
+    : it.exit_kind === "full" || it.is_exit
+      ? `<span class="pill sell" title="sold the whole position — nothing left in the wallet">EXIT</span>`
+      : `<span class="pill sell" title="${it.exit_kind === "partial" ? "sold part of the position" : "sell — history too thin to say how much of the bag"}">SELL</span>`;
+  // Partial sells say how much of the bag went ("sold 38% of bag"), so a
+  // trim and a near-exit read differently at a glance.
+  const bagBit = it.type === "SELL" && it.exit_kind === "partial" && it.sold_frac != null
+    ? `sold ${Math.round(it.sold_frac * 100)}% of bag`
+    : null;
   const bits = [
     it.who ? displaySymbol(String(it.who)) : null,
     it.counterparty ? `${xferIn ? "from" : "to"} ${displaySymbol(String(it.counterparty))}` : null,
+    bagBit,
     it.pct_supply != null ? fmtPct(it.pct_supply) : null,
     it.amount_usd != null ? fmtUsd(it.amount_usd) : null,
     it.mcap_usd != null ? `MC ${fmtUsd(it.mcap_usd)}` : null,

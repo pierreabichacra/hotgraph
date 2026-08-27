@@ -154,6 +154,9 @@ Two bot statements override the arithmetic, because stated beats computed:
 - `Holds 14.27M MM (1.52%)` — the bot's own figure for the total position
   after the trade; it corrects any drift from missed alerts.
 - `Exit (TICKER)` — the position is closed. A later buy reopens it.
+- Bots A and B never print `Exit`, so the feed tells a **partial sell** ("sold
+  38% of bag") from an **EXIT** by replaying the position: a sell that
+  leaves the wallet at zero is an exit, whatever the alert said.
 
 Clamping at zero matters because a sell whose matching buy predates your
 history window would otherwise drive the total negative. When that happens the

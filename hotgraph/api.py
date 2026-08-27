@@ -499,7 +499,7 @@ def feed(kind: str = "all", limit: int = 100):
                 f"""SELECT e.ts, e.side, e.is_exit, e.token_symbol, e.token_key,
                            e.chain, e.chain_tag, e.trader_handle, e.trader_key,
                            e.pct_supply, e.amount_usd, e.mcap_usd, e.source, e.raw_id,
-                           e.counterparty
+                           e.counterparty, e.sold_frac, e.remaining_pct
                       FROM events e
                      WHERE {side_clause}
                        AND NOT EXISTS (SELECT 1 FROM token_blacklist b
@@ -508,10 +508,24 @@ def feed(kind: str = "all", limit: int = 100):
                      ORDER BY e.ts DESC LIMIT ?""",
                 (limit,),
             ):
+                # A sell is an EXIT when the bot said so OR the replayed
+                # position hit zero after it (bots A/B never print Exit);
+                # otherwise it's partial when we know what share of the bag
+                # moved, and just "a sell" when the history is too thin to say.
+                exit_kind = None
+                if r["side"] == "SELL":
+                    rem = r["remaining_pct"]
+                    if r["is_exit"] or (rem is not None and rem <= positions_mod.DUST_PCT):
+                        exit_kind = "full"
+                    elif r["sold_frac"] is not None:
+                        exit_kind = "partial"
                 items.append({
                     "ts": r["ts"],
                     "type": r["side"],
                     "is_exit": bool(r["is_exit"]),
+                    "exit_kind": exit_kind,
+                    "sold_frac": r["sold_frac"],
+                    "remaining_pct": r["remaining_pct"],
                     "symbol": r["token_symbol"] or str(r["token_key"]).replace("sym:", ""),
                     "chain": r["chain"],
                     "token_key": r["token_key"],
