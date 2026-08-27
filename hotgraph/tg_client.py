@@ -18,6 +18,11 @@ def make_client() -> TelegramClient:
         api_hash,
         device_model="HotGraph",
         app_version=__version__,
+        # After any reconnect (Wi-Fi blip, laptop sleep, Telegram DC hiccup)
+        # ask Telegram for the updates that were sent meanwhile instead of
+        # silently resuming from "now". Without this, every alert that landed
+        # during the gap simply never reaches the NewMessage handler.
+        catch_up=True,
     )
 
 

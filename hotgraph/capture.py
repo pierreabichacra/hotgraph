@@ -137,44 +137,78 @@ async def cmd_backfill(
         print(f"\n{total_new} new messages stored.")
 
 
-async def catch_up(client, sources: list[Source], first_run_days: int = 31) -> int:
-    """Fetch every alert that arrived while we were offline.
+_catch_up_lock = asyncio.Lock()
+
+
+async def catch_up(
+    client, sources: list[Source], first_run_days: int = 31, quiet: bool = False,
+) -> tuple[int, int]:
+    """Fetch every alert Telegram has that we don't.
 
     The cursor is the highest tg_msg_id already stored per source — Telegram
     message ids are monotonic per chat, so `min_id` fetches exactly the gap:
-    no overlap, no misses, regardless of how long the process was down. A
-    source with no history at all gets a first_run_days backfill instead.
+    no overlap, no misses, whether the process was down for a week or the
+    live handler dropped one update a minute ago. A source with no history
+    at all gets a first_run_days backfill instead.
 
-    New messages are parsed immediately; returns how many events were added.
+    Runs at startup and then every minute (reconcile_forever), so it's one
+    cheap request per source when nothing is missing. quiet=True prints only
+    when something was actually found. New messages are parsed immediately;
+    returns (messages stored, events added).
     """
     from .ingest import ingest_one
 
-    events_added = 0
-    since_ts = time.time() - first_run_days * 86400
-    with db_session() as conn:
-        for src in sources:
-            last_id = conn.execute(
-                "SELECT MAX(tg_msg_id) FROM raw_messages WHERE source = ?",
-                (src.id,),
-            ).fetchone()[0]
-            try:
-                entity = await client.get_entity(src.chat)
-            except Exception as exc:
-                print(f"  ! {src.id}: {exc}")
-                continue
+    async with _catch_up_lock:  # startup and the timer never overlap
+        stored = events_added = 0
+        since_ts = time.time() - first_run_days * 86400
+        with db_session() as conn:
+            for src in sources:
+                last_id = conn.execute(
+                    "SELECT MAX(tg_msg_id) FROM raw_messages WHERE source = ?",
+                    (src.id,),
+                ).fetchone()[0]
+                try:
+                    entity = await client.get_entity(src.chat)
+                except Exception as exc:
+                    print(f"  ! {src.id}: {exc}", flush=True)
+                    continue
 
-            new = 0
-            async for msg in client.iter_messages(entity, min_id=last_id or 0):
-                if not last_id and msg.date.timestamp() < since_ts:
-                    break
-                raw_id = _store(conn, src.id, msg)
-                if raw_id:
-                    new += 1
-                    events_added += ingest_one(conn, raw_id)
-            print(f"  {src.id}: {new} missed message(s) fetched"
-                  + ("" if last_id else f" (first run, last {first_run_days}d)"))
-        set_meta(conn, "last_fetch_ts", int(time.time()))
-    return events_added
+                new = 0
+                async for msg in client.iter_messages(entity, min_id=last_id or 0):
+                    if not last_id and msg.date.timestamp() < since_ts:
+                        break
+                    raw_id = _store(conn, src.id, msg)
+                    if raw_id:
+                        new += 1
+                        events_added += ingest_one(conn, raw_id)
+                stored += new
+                if new or not quiet:
+                    stamp = time.strftime("%H:%M:%S")
+                    print(f"[{stamp}] {src.id}: {new} missed message(s) fetched"
+                          + ("" if last_id else f" (first run, last {first_run_days}d)"),
+                          flush=True)
+            set_meta(conn, "last_fetch_ts", int(time.time()))
+    return stored, events_added
+
+
+async def reconcile_forever(client, sources: list[Source], every: float = 60) -> None:
+    """Every `every` seconds, ask each bot chat for anything newer than what
+    we hold. This is the safety net under the live handler: an update Telegram
+    never delivered, a handler that failed mid-write, an alert that landed
+    while we were still starting up — all of it shows up here within a minute
+    instead of never. Positions are rebuilt and pages woken when it finds
+    trades."""
+    while True:
+        await asyncio.sleep(every)
+        try:
+            stored, events = await catch_up(client, sources, quiet=True)
+        except Exception as exc:  # network blip — the next tick tries again
+            print(f"  ! reconcile: {exc}", flush=True)
+            continue
+        if events:
+            await _rebuild_and_notify()
+        elif stored:
+            _notify_pages()
 
 
 def _notify_pages() -> None:
@@ -223,14 +257,23 @@ async def setup_live(client, sources: list[Source]) -> int:
         if src is None:
             return
         added = 0
-        with db_session() as conn:
-            raw_id = _store(conn, src.id, event.message)
-            if raw_id is None:
-                return
-            # Parse just this message — no re-scan of history.
-            from .ingest import ingest_one
-            added = ingest_one(conn, raw_id)
-            set_meta(conn, "last_fetch_ts", int(time.time()))
+        try:
+            with db_session() as conn:
+                raw_id = _store(conn, src.id, event.message)
+                if raw_id is None:
+                    return
+                # Parse just this message — no re-scan of history.
+                from .ingest import ingest_one
+                added = ingest_one(conn, raw_id)
+                set_meta(conn, "last_fetch_ts", int(time.time()))
+        except Exception as exc:
+            # Say so, loudly, and move on: Telethon would otherwise swallow
+            # this into its logger. The minute reconcile re-fetches the
+            # message by id, so nothing is lost — just late.
+            stamp = time.strftime("%H:%M:%S")
+            print(f"[{stamp}] ! {src.id}: failed to store message {event.message.id}: {exc}",
+                  flush=True)
+            return
 
         stamp = time.strftime("%H:%M:%S")
         preview = _msg_text(event.message).replace("\n", " ")[:90]

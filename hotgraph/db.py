@@ -199,7 +199,10 @@ CREATE TABLE IF NOT EXISTS activity_buckets (
 def connect(path=None) -> sqlite3.Connection:
     """Open the database, creating it and its schema if needed."""
     ensure_dirs()
-    conn = sqlite3.connect(str(path or DB_PATH))
+    # Writers take turns: the live handler, the positions rebuild thread and
+    # API writes all share this file. Wait out a busy sibling rather than
+    # raising "database is locked" and dropping an alert on the floor.
+    conn = sqlite3.connect(str(path or DB_PATH), timeout=30)
     conn.row_factory = sqlite3.Row
     conn.executescript(SCHEMA)
     _migrate(conn)

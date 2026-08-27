@@ -102,7 +102,7 @@ Revoke it any time from Telegram → Settings → Devices ("HotGraph").
 One process does everything: first it **catches up on alerts missed while the
 app was off** (the cursor is the highest stored message id per bot, so the gap
 fills exactly — no overlap, no misses; on a fresh database that is a 31-day
-backfill), then it serves the page and keeps listening live.
+backfill), then it serves the page and keeps listening live. The same check repeats every minute while it runs, so an alert Telegram failed to deliver live is fetched a minute late rather than never.
 
 ### Optional pieces
 

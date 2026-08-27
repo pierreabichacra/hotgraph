@@ -3,11 +3,14 @@
     python -m hotgraph.run            # -> http://localhost:8000
     python -m hotgraph.run --port 9000
 
-One process, three jobs, in order:
-  1. catch-up  — fetch every alert missed while the app was off (cursor =
+One process, four jobs:
+  1. listen    — live Telegram alerts, parsed and graphed as they arrive
+                 (registered first, so nothing slips past during catch-up)
+  2. catch-up  — fetch every alert missed while the app was off (cursor =
                  highest stored message id per bot; no overlap, no gaps)
-  2. serve     — the web page + API
-  3. listen    — live Telegram alerts, parsed and graphed as they arrive
+  3. serve     — the web page + API
+  4. reconcile — repeat the catch-up every minute as a safety net under the
+                 live handler, so a dropped update is late, never lost
 
 Ctrl-C stops all of it.
 """
@@ -20,7 +23,7 @@ import time
 
 import uvicorn
 
-from .capture import catch_up, setup_live
+from .capture import catch_up, reconcile_forever, setup_live
 from .config import load_sources
 from .db import get_meta, session as db_session
 from .positions import run as rebuild_positions
@@ -83,12 +86,16 @@ async def amain(host: str, port: int) -> None:
     from . import api as api_mod
     api_mod.tg_client = client
 
-    events_added = await catch_up(client, sources)
+    # Handler first, catch-up second: an alert arriving mid-catch-up is then
+    # seen by both, and the (source, message id) key makes that harmless —
+    # the other order left a window whose messages were never fetched, since
+    # the next catch-up starts from the newest id the handler had stored.
+    n = await setup_live(client, sources)
+
+    _, events_added = await catch_up(client, sources)
     if events_added:
         print(f"  {events_added} new event(s) — rebuilding positions", flush=True)
         rebuild_positions()
-
-    n = await setup_live(client, sources)
 
     server = uvicorn.Server(
         uvicorn.Config("hotgraph.api:app", host=host, port=port, log_level="warning")
@@ -102,11 +109,12 @@ async def amain(host: str, port: int) -> None:
     # lifetime.
     serve_task = asyncio.create_task(server.serve())
     tg_task = asyncio.create_task(client.run_until_disconnected())
+    reconcile_task = asyncio.create_task(reconcile_forever(client, sources))
     try:
         await asyncio.wait({serve_task, tg_task}, return_when=asyncio.FIRST_COMPLETED)
     finally:
         server.should_exit = True
-        for t in (serve_task, tg_task):
+        for t in (serve_task, tg_task, reconcile_task):
             t.cancel()
         await client.disconnect()
 
