@@ -114,7 +114,11 @@ def ensure_deps(vp, force=False):
     rc = run([vp, "-m", "pip", "install", "-q", "--disable-pip-version-check",
               "-r", str(REQ)])
     if rc != 0:
-        say("pip failed - see the error above (network? proxy?). Rerun start when fixed.")
+        say("pip failed - see the error above (network? proxy?). Rerun start when fixed.\n"
+            "  If it says 'Microsoft Visual C++ 14.0 or greater is required', a package\n"
+            "  has no prebuilt wheel for this Python version. Update requirements.txt\n"
+            "  or install a Python release the packages support (3.12 is safest):\n"
+            "    winget install Python.Python.3.12")
         sys.exit(1)
     STAMP.write_text(want)
 
