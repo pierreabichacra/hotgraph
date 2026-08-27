@@ -216,9 +216,16 @@ window: the same bubble with every holder attached, next to everything known
 about it (address, market cap, FDV, first/last action, and per holder the
 share held, bought/sold, invested/realised/PnL and entry market cap).
 
+## Token window
+
+Right-click a token bubble to open that same window for it: the bubble with
+every holder attached in the middle, the token's details and the full holder
+list beside it, plus **✓ verify holders** and **💲 verify market cap**.
+Right-clicking a holder inside the window opens the holder window.
+
 ## Holder window
 
-Click a holder bubble to open that wallet: the position it was clicked on
+Right-click a holder bubble to open that wallet: the position it was opened from
 in full (share, bought/sold, invested/realised/PnL, entry market cap, alert
 count, on-chain check if any), then every token the wallet currently holds
 (exited positions folded away underneath). **✓ verify holdings** asks the

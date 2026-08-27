@@ -536,12 +536,15 @@ function render(data, live = false) {
     .on("mouseleave", hideTip)
     .on("click", (e, d) => {
       e.stopPropagation();
-      if (d.kind === "token") {
-        selectToken(d, e.currentTarget);
-        focusOn(d);
-      } else {
-        openHolderModal(d);
-      }
+      if (d.kind !== "token") return;
+      selectToken(d, e.currentTarget);
+      focusOn(d);
+    })
+    .on("contextmenu", (e, d) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (d.kind === "token") openTokenModalFor(d);
+      else openHolderModal(d);
     });
 
   // Aspect of the canvas area not covered by side panels, normalised so
@@ -1953,7 +1956,9 @@ caInput.addEventListener("keydown", (e) => {
 /* ---------- token window ----------
  * The same bubbles as the main graph — token in the middle, holders in
  * orbit, same styling and tooltips — drawn for one token in a modal, with
- * the side column spelling out what the bubbles only hint at. */
+ * the side column spelling out what the bubbles only hint at. Opened by
+ * right-clicking a token bubble, or by searching for a token that isn't
+ * drawn. */
 
 const tokenModal = document.getElementById("tokenModal");
 const tmGraph = d3.select("#tmGraph");
@@ -1964,6 +1969,18 @@ let tmSim = null;
 let tmData = null; // what the open window shows; null when closed
 const tmVerify = document.getElementById("tmVerify");
 const tmMcap = document.getElementById("tmMcap");
+
+// Right-click on a token bubble: fetch the full picture and open its window.
+async function openTokenModalFor(d) {
+  if (tmData && tmData.token.id === d.id) return;
+  try {
+    const res = await fetch(`/api/token?q=${encodeURIComponent(String(d.token_key))}`);
+    if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+    openTokenModal(await res.json());
+  } catch (err) {
+    toast(`Couldn't load token: ${escapeHtml(err.message)}`, 6000);
+  }
+}
 
 function openTokenModal(data) {
   tmData = data;
@@ -2129,7 +2146,11 @@ function renderMiniGraph(data) {
   node
     .on("mousemove", (e, d) => showTip(e, d))
     .on("mouseleave", hideTip)
-    .on("click", (e, d) => { e.stopPropagation(); if (d.kind === "person") openHolderModal(d); })
+    .on("contextmenu", (e, d) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (d.kind === "person") openHolderModal(d);
+    })
     .call(d3.drag()
       .on("start", (e, d) => { if (!e.active) tmSim.alphaTarget(0.25).restart(); d.fx = d.x; d.fy = d.y; })
       .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
@@ -2216,7 +2237,7 @@ function renderTokenSide(data) {
 }
 
 /* ---------- holder window ----------
- * Click a holder bubble: their position in that token in full, every token
+ * Right-click a holder bubble: their position in that token in full, every token
  * the wallet holds underneath, and a button that asks the chain what the
  * wallet really holds of each. */
 
