@@ -17,6 +17,7 @@ from dataclasses import dataclass
 
 import yaml
 
+from .chains import canonical_tag
 from .paths import CONFIG_DIR
 
 # Several endpoints per chain, tried in order — public RPCs go down or
@@ -68,13 +69,108 @@ RPC_DEFAULTS = {
         "https://stable.drpc.org",
         "https://stable-mainnet.rpc.sentio.xyz",
     ],
+    "OP": [
+        "https://optimism-rpc.publicnode.com",
+        "https://optimism.drpc.org",
+        "https://public.1rpc.io/op",
+        "https://mainnet.optimism.io",
+    ],
+    "POLY": [
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://polygon.drpc.org",
+        "https://public.1rpc.io/matic",
+        "https://polygon-rpc.com",
+    ],
+    "AVAX": [
+        "https://avalanche-c-chain-rpc.publicnode.com",
+        "https://avalanche.drpc.org",
+        "https://public.1rpc.io/avax/c",
+        "https://api.avax.network/ext/bc/C/rpc",
+    ],
+    "BLAST": [
+        "https://rpc.blast.io",
+        "https://blast-rpc.publicnode.com",
+        "https://blast.drpc.org",
+    ],
+    "LINEA": [
+        "https://rpc.linea.build",
+        "https://linea-rpc.publicnode.com",
+        "https://linea.drpc.org",
+    ],
+    "SONIC": [
+        "https://rpc.soniclabs.com",
+        "https://sonic-rpc.publicnode.com",
+        "https://sonic.drpc.org",
+    ],
+    "MONAD": [
+        "https://rpc.monad.xyz",
+        "https://monad.drpc.org",
+    ],
+    "UNI": [
+        "https://mainnet.unichain.org",
+        "https://unichain-rpc.publicnode.com",
+        "https://unichain.drpc.org",
+    ],
+    "ZK": [
+        "https://mainnet.era.zksync.io",
+        "https://zksync.drpc.org",
+        "https://public.1rpc.io/zksync2-era",
+    ],
+    "SCROLL": [
+        "https://rpc.scroll.io",
+        "https://scroll-rpc.publicnode.com",
+        "https://scroll.drpc.org",
+    ],
+    "MANTLE": [
+        "https://rpc.mantle.xyz",
+        "https://mantle-rpc.publicnode.com",
+        "https://mantle.drpc.org",
+    ],
+    "BERA": [
+        "https://rpc.berachain.com",
+        "https://berachain-rpc.publicnode.com",
+        "https://berachain.drpc.org",
+    ],
+    "SEI": [
+        "https://evm-rpc.sei-apis.com",
+        "https://sei-evm-rpc.publicnode.com",
+        "https://sei.drpc.org",
+    ],
+    "CRO": [
+        "https://evm.cronos.org",
+        "https://cronos-evm-rpc.publicnode.com",
+        "https://cronos.drpc.org",
+    ],
+    "XLAYER": [
+        "https://rpc.xlayer.tech",
+        "https://xlayer.drpc.org",
+    ],
+    "WORLD": [
+        "https://worldchain-mainnet.g.alchemy.com/public",
+        "https://worldchain.drpc.org",
+    ],
+    "INK": [
+        "https://rpc-gel.inkonchain.com",
+        "https://ink.drpc.org",
+    ],
+    "PLASMA": [
+        "https://rpc.plasma.to",
+        "https://plasma.drpc.org",
+    ],
+    "GNOSIS": [
+        "https://rpc.gnosischain.com",
+        "https://gnosis-rpc.publicnode.com",
+        "https://gnosis.drpc.org",
+    ],
+    "CELO": [
+        "https://forno.celo.org",
+        "https://celo.drpc.org",
+    ],
     "SOL": [
         "https://api.mainnet-beta.solana.com",
         "https://solana-rpc.publicnode.com",
     ],
 }
-RPC_DEFAULTS["ROBINHOOD"] = RPC_DEFAULTS["RH"]
-RPC_DEFAULTS["SOLANA"] = RPC_DEFAULTS["SOL"]
 
 _SIG_BALANCE_OF = "0x70a08231"    # balanceOf(address)
 _SIG_TOTAL_SUPPLY = "0x18160ddd"  # totalSupply()
@@ -93,13 +189,15 @@ def rpc_urls_for(chain_tag: str | None, chain: str | None = None) -> list[str]:
     built-in defaults as fallbacks — so an override reorders, it doesn't
     remove the safety net.
     """
-    tag = (chain_tag or "").upper()
+    # Aliases fold into the canonical tag, so an alert tagged [ROBINHOOD]
+    # and a config entry under MATIC both land on the right list.
+    tag = canonical_tag(chain_tag) or ""
     overrides = {}
     path = CONFIG_DIR / "rpc.yaml"
     if path.exists():
         with open(path) as fh:
             overrides = {
-                str(k).upper(): v
+                canonical_tag(str(k)): v
                 for k, v in ((yaml.safe_load(fh) or {}).get("rpc") or {}).items()
             }
     urls = _as_list(overrides.get(tag)) + _as_list(RPC_DEFAULTS.get(tag))

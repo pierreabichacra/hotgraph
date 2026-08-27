@@ -1,7 +1,7 @@
 """events -> positions. Rebuilt from scratch every run.
 
     python -m hotgraph.positions
-    python -m hotgraph.positions --explain loganlim_x
+    python -m hotgraph.positions --explain trader_one
 
 How a position is computed
 --------------------------
@@ -129,8 +129,10 @@ def run() -> dict:
                       amount_usd, pct_supply, holds_pct, mcap_usd, pnl_usd,
                       tx_hash, ts
                  FROM events
-                ORDER BY chain, token_key, ts ASC"""
+                ORDER BY chain, token_key, ts ASC, id ASC"""
         ).fetchall()
+        # id breaks ts ties: a transfer's OUT and IN halves share a timestamp
+        # and must apply in that order once both wallets belong to one person.
 
         def _is_address_key(k: str) -> bool:
             return k.startswith("0x") or k.startswith("trunc:") or len(k) >= 32
@@ -218,20 +220,27 @@ def run() -> dict:
                 if _is_address_key(str(st["person"])):
                     st["person"] = r["trader_handle"]
 
-            # An earlier Exit closed the position, but buying again reopens it.
-            if r["side"] == "BUY":
+            # Buys and incoming transfers add to the wallet; sells and
+            # outgoing transfers take away. Only real trades count towards
+            # bought/sold and the dollars — a transfer is the same tokens
+            # changing pockets, which after a merge nets out to nothing.
+            side = r["side"]
+            inbound = side in ("BUY", "TRANSFER_IN")
+
+            # An earlier Exit closed the position, but buying (or receiving)
+            # again reopens it.
+            if inbound:
                 st["exited"] = False
 
             pct = r["pct_supply"]
             if pct is None:
                 st["missing_pct"] = True
             else:
-                if r["side"] == "BUY":
+                if side == "BUY":
                     st["bought"] += pct
-                    st["running"] += pct
-                else:
+                elif side == "SELL":
                     st["sold"] += pct
-                    st["running"] -= pct
+                st["running"] += pct if inbound else -pct
                 if st["running"] < -DUST_PCT:
                     st["went_negative"] = True
                 st["running"] = max(0.0, st["running"])
@@ -248,9 +257,9 @@ def run() -> dict:
 
             usd = r["amount_usd"]
             if usd is not None:
-                if r["side"] == "BUY":
+                if side == "BUY":
                     st["invested"] += usd
-                else:
+                elif side == "SELL":
                     st["realized"] += usd
 
             if r["side"] == "BUY" and r["mcap_usd"]:
@@ -429,7 +438,7 @@ def explain(who: str) -> None:
 
             pct = r["pct_supply"]
             if pct is not None and not is_dup:
-                running += pct if r["side"] == "BUY" else -pct
+                running += pct if r["side"] in ("BUY", "TRANSFER_IN") else -pct
                 running = max(0.0, running)
             if r["is_exit"] and not is_dup:
                 running = 0.0

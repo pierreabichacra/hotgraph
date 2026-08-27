@@ -1,9 +1,10 @@
 # RPC endpoints used by the "verify holders" button — key-free, public.
 #
 # Each chain tries several endpoints in order (failover on rate limits and
-# outages). ETH, BSC, BASE, ARB, HYPE, RH, ABS, STBL and SOL all ship with
-# built-in fallback lists (see RPC_DEFAULTS in hotgraph/verify.py, sourced
-# from chainlist.org).
+# outages). Every chain in hotgraph/chains.py except ARC and TRON ships with
+# a built-in fallback list (see RPC_DEFAULTS in hotgraph/verify.py, sourced
+# from chainlist.org). Keys are chain tags; aliases work too (MATIC = POLY,
+# ROBINHOOD = RH).
 #
 # Entries here are tried FIRST, then the built-in defaults as fallbacks.
 # A value can be a single URL or a list:

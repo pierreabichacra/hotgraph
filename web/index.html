@@ -10,6 +10,7 @@
 </head>
 <body>
   <header class="bar" id="bar">
+   <div class="row">
     <a class="brand" href="/" title="HotGraph">
       <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
         <circle class="ring" cx="16" cy="16" r="13"/>
@@ -19,14 +20,10 @@
     </a>
 
     <div class="group">
-      <label class="ctl">
+      <span class="ctl" title="show only tokens on the selected chains — pick as many as you like">
         <span class="cap">Chain</span>
-        <select id="chain">
-          <option value="">all</option>
-          <option value="solana">solana</option>
-          <option value="evm">evm</option>
-        </select>
-      </label>
+        <button id="chainFilterBtn" class="btn">all ▾</button>
+      </span>
       <label class="ctl">
         <span class="cap">Window</span>
         <select id="window">
@@ -85,14 +82,10 @@
       </label>
     </div>
 
-    <div class="spacer"></div>
+   </div>
 
-    <div class="stats">
-      <div class="stat" id="sync" title="when alerts were last fetched from Telegram"></div>
-      <div class="stat" id="stat"></div>
-    </div>
-
-    <div class="group">
+   <div class="row">
+    <div class="group actions">
       <button id="soundToggle" class="btn icon" title="play a sound when a new alert arrives">🔔</button>
       <span class="ctl split" title="re-fetch alerts this far back from Telegram, re-parse them, and rebuild all positions from just that window">
         <select id="rebuildDays">
@@ -106,6 +99,8 @@
       </span>
       <button id="reload" class="btn" title="re-fetch the graph">Reload</button>
       <button id="mergeToggle" class="btn" title="merge handles and wallets that belong to one person">Merge</button>
+      <button id="walletsBtn" class="btn" title="suspected new wallets — tracked people sent tokens to these (nothing received back), but nobody tracks them yet"><span class="ico">👤</span> Wallets<span class="count" id="walletsCount" hidden></span></button>
+      <button id="signOut" class="btn" title="log this HotGraph device out of Telegram and delete its session — the app stops; run start again to log in (your alerts and positions are kept)">⏏ Sign out</button>
     </div>
 
     <!-- Activity strip: one day, 00:00 → 24:00 local, per bucket —
@@ -132,15 +127,13 @@
       </div>
       <svg id="activitySvg" aria-label="alert activity over the day"></svg>
       <div class="activity-tip" id="activityTip" hidden></div>
-      <div class="activity-pop" id="activityPop" hidden>
-        <div class="activity-pop-head">
-          <strong id="actPopTitle"></strong>
-          <span class="panel-sub" id="actPopMeta"></span>
-          <button id="actPopClose" class="btn small">✕</button>
-        </div>
-        <div class="activity-pop-list token-list" id="actPopList"></div>
-      </div>
     </div>
+
+    <div class="stats">
+      <div class="stat" id="sync" title="when alerts were last fetched from Telegram"></div>
+      <div class="stat" id="stat"></div>
+    </div>
+   </div>
   </header>
 
   <aside id="feedPanel" class="panel left narrow" hidden>
@@ -154,6 +147,7 @@
       <button data-kind="buys">buys</button>
       <button data-kind="sells">sells</button>
       <button data-kind="swaps">swaps</button>
+      <button data-kind="transfers" title="tokens moved between wallets — not trades">moves</button>
       <button data-kind="other">other</button>
     </div>
     <div id="feedList" class="token-list"></div>
@@ -170,7 +164,7 @@
       <button data-sort="mcap">mcap</button>
       <button data-sort="holders">holders</button>
     </div>
-    <button id="mcapRefresh" class="btn small block" title="fetch the current market cap of every listed token from DexScreener (retries on rate limits)">💲 refresh market caps</button>
+    <button id="mcapRefresh" class="btn small block" title="fetch the current market cap of every listed token from DexScreener now (retries on rate limits) — this also happens automatically every 3 minutes while the page is open">💲 refresh market caps</button>
     <button id="verifyAll" class="btn small block" title="check every listed holder's real balance on-chain, for every listed token (public RPCs; one token at a time)">✓ verify holders</button>
     <div id="tokenList" class="token-list"></div>
     <div class="panel-head groups-head">
@@ -210,6 +204,16 @@
   <button id="resetZoom" class="map-btn" title="reset zoom — frame the whole graph (double-click the map also works)">⛶</button>
   <button id="listToggle" class="map-btn wide" title="token list"><span class="k tokens"></span>Tokens</button>
   <button id="feedToggle" class="map-btn wide left" title="notification feed"><span class="k feed"></span>Feed</button>
+  <input id="caSearch" class="map-search" type="text" placeholder="🔍 contract address…" spellcheck="false" autocomplete="off"
+         title="find a token by contract address (or ticker) — Enter to search. On the graph: focuses it; otherwise opens it with its holders in a window">
+
+  <div id="arrange" class="seg arrange" title="arrange the bubbles — click the active mode again to go back to the free layout">
+    <button data-mode="pack" title="regroup: pack every token cluster as tightly as possible">⊞ pack</button>
+    <button data-mode="mcap" title="sort by market cap, biggest first — read left to right, top to bottom">$ mcap</button>
+    <button data-mode="newest" title="sort by last action, newest first — read left to right, top to bottom">⏱ newest</button>
+    <button data-mode="oldest" title="sort by last action, oldest first — read left to right, top to bottom">⏱ oldest</button>
+    <button data-mode="holders" title="sort by holders, most first — read left to right, top to bottom">👥 holders</button>
+  </div>
 
   <div id="userFilterMenu" class="dropdown" hidden>
     <input id="userSearch" class="search" placeholder="search holders…">
@@ -217,9 +221,62 @@
     <button id="userClear" class="btn small">clear selection</button>
   </div>
 
+  <div id="chainFilterMenu" class="dropdown" hidden>
+    <input id="chainSearch" class="search" placeholder="search chains…">
+    <div id="chainList" class="user-list"></div>
+    <button id="chainClear" class="btn small">clear selection</button>
+  </div>
+
+  <!-- Token window: a token that the current filters don't draw, shown on
+       its own with every holder attached, plus everything known about it. -->
+  <div id="tokenModal" class="modal" hidden>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="tmTitle">
+      <div class="modal-head">
+        <strong id="tmTitle"></strong>
+        <span class="panel-sub" id="tmSub"></span>
+        <button id="tmVerify" class="btn small verify" title="check every listed holder's real balance on-chain (public RPCs)">✓ verify holders</button>
+        <button id="tmMcap" class="btn small verify" title="fetch this token's current market cap from DexScreener">💲 verify market cap</button>
+        <button id="tmClose" class="btn small close" title="close (Esc)">✕</button>
+      </div>
+      <div class="modal-body">
+        <svg id="tmGraph" aria-label="the token and its holders"></svg>
+        <div class="modal-side" id="tmSide"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Holder window: one wallet's position in the token it was clicked on,
+       every token it holds, and an on-chain check of those holdings. -->
+  <div id="holderModal" class="modal over" hidden>
+    <div class="modal-box holder" role="dialog" aria-modal="true" aria-labelledby="hmTitle">
+      <div class="modal-head">
+        <span class="dot" id="hmDot"></span>
+        <strong id="hmTitle"></strong>
+        <span class="panel-sub" id="hmSub"></span>
+        <button id="hmVerify" class="btn small verify" title="check this wallet's real balance of every token it holds, on-chain">✓ verify holdings</button>
+        <button id="hmClose" class="btn small close" title="close (Esc)">✕</button>
+      </div>
+      <!-- Wallet on the block explorers of every chain it trades on -->
+      <div class="hm-links" id="hmLinks" hidden></div>
+      <div class="holder-body" id="hmBody"></div>
+    </div>
+  </div>
+
+  <!-- Suspected new wallets: transfer recipients nobody tracks yet -->
+  <div id="walletsModal" class="modal" hidden>
+    <div class="modal-box holder" role="dialog" aria-modal="true" aria-labelledby="wmTitle">
+      <div class="modal-head">
+        <strong id="wmTitle">👤 Suspected new wallets</strong>
+        <span class="panel-sub" id="wmSub"></span>
+        <button id="wmClose" class="btn small close" title="close (Esc)">✕</button>
+      </div>
+      <div class="holder-body" id="wmBody"></div>
+    </div>
+  </div>
+
   <div id="nodeActions" class="node-actions" hidden>
     <button id="actVerify" title="check every holder's real balance on-chain">✓ verify holders</button>
-    <button id="actChart" title="open the GMGN chart in a new tab">📈 chart</button>
+    <button id="actChart" class="gmgn" title="open the GMGN chart in a new tab"><img src="/static/gmgn.svg" alt="GMGN chart"></button>
     <button id="actHide" title="hide this token from the graph and feed (restore from the Tokens panel)">🚫 hide</button>
   </div>
 
@@ -232,6 +289,31 @@
   </div>
 
   <!-- Right-click menu for a feed row: the alert's own links, as quick links -->
+  <!-- Activity bucket popover: outside the header so it stacks with the
+       other floating layers rather than inside the toolbar's own context. -->
+  <div class="activity-pop" id="activityPop" hidden>
+    <div class="activity-pop-head">
+      <strong id="actPopTitle"></strong>
+      <span class="panel-sub" id="actPopMeta"></span>
+      <button id="actPopClose" class="btn small">✕</button>
+    </div>
+    <!-- Filter + sort the bucket's trades; clicking the active sort key flips its direction -->
+    <div class="activity-pop-tools">
+      <div class="seg" id="actPopKind">
+        <button data-kind="all" class="active">all</button>
+        <button data-kind="buy">buys</button>
+        <button data-kind="sell">sells</button>
+      </div>
+      <div class="seg" id="actPopSort" title="sort — click again to flip the direction">
+        <button data-key="ts" class="active">time ▼</button>
+        <button data-key="mcap_usd">mcap</button>
+        <button data-key="amount_usd">$ amount</button>
+        <button data-key="pct_supply">% supply</button>
+      </div>
+    </div>
+    <div class="activity-pop-list token-list" id="actPopList"></div>
+  </div>
+
   <div id="linkMenu" class="ctx-menu" hidden></div>
 
   <div id="toasts" class="toasts"></div>

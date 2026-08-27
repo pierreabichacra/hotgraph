@@ -176,7 +176,8 @@ def tg_credentials() -> tuple[int, str]:
             "Missing TG_API_ID / TG_API_HASH.\n"
             "  1. Go to https://my.telegram.org -> API development tools\n"
             "  2. Create an app, copy api_id and api_hash\n"
-            "  3. cp .env.example .env  and fill them in\n"
+            "  3. Run: python start.py  (it asks and writes .env), or put\n"
+            "     TG_API_ID=... and TG_API_HASH=... in .env yourself\n"
         )
     return int(api_id), api_hash
 

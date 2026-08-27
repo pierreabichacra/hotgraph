@@ -38,35 +38,35 @@ def _tx_json(host: str, tx64: str) -> str:
 # Entries are (text, ts) or (text, ts, raw_json).
 EXTRA = [
     # A second trader entering MADE, then adding again.
-    ("""[SOL] [BUY] - (FOMO BUY) joswe — S: 1
-Fomo: joswe
+    ("""[SOL] [BUY] - (FOMO BUY) alice — S: 1
+Fomo: alice
 Method: 9xQe...4KtP
 ➡️ SENT: 4200.00 USD Coin (USDC)
 ⬅️ RECEIVED: 2913000.00 SelfMade by SP3ND (MADE) 0.30%
 📊 MC: $1.42M - Age: 4 days ago""", NOW - 3 * DAY),
 
-    ("""[SOL] [BUY] - (FOMO BUY) @loganlim_x — S: 1
-Fomo: @loganlim_x
+    ("""[SOL] [BUY] - (FOMO BUY) @trader_one — S: 1
+Fomo: @trader_one
 Method: DF1o...7QBH
 ➡️ SENT: 2500.00 USD Coin (USDC)
 ⬅️ RECEIVED: 1650000.00 SelfMade by SP3ND (MADE) 0.17%
 📊 MC: $2.10M - Age: 5 days ago""", NOW - 2 * DAY),
 
-    # Logan trims part of MADE but stays in.
-    ("""[SOL] dimiNew — S: 1
+    # Trader one trims part of MADE but stays in.
+    ("""[SOL] EveTest — S: 1
 🟢Swap 0.9 SOL (~$210.00)
    to: 980000.00 SelfMade by SP3ND (MADE) 0.10%
 📊 MC: $2.30M - Age: 5 days ago""", NOW - 2 * DAY + 3600),
 
-    ("""[SOL] [SELL] - (FOMO SELL) @loganlim_x — S: 1
-Fomo: @loganlim_x
+    ("""[SOL] [SELL] - (FOMO SELL) @trader_one — S: 1
+Fomo: @trader_one
 Method: DF1o...7QBH
 ➡️ SENT: 800000.00 SelfMade by SP3ND (MADE) 0.08%
 ⬅️ RECEIVED: 1900.00 USD Coin (USDC)
 📊 MC: $2.25M - Age: 6 days ago""", NOW - DAY),
 
-    # Joswe fully exits BITBANK — should render grayed out.
-    ("""[BASE] joswe — S: 1
+    # alice fully exits BITBANK — should render grayed out.
+    ("""[BASE] alice — S: 1
 🔴Swap 879688538.89 Bitbank (BITBANK) 0.88%
    to: 1.4 ETH (~$4620.00)
 📊 Exit (BITBANK) ▼
@@ -74,26 +74,26 @@ Method: DF1o...7QBH
 MC: $412,900 - Age: 1 month ago""", NOW - 6 * 3600),
 
     # A third token with two holders, so the graph has more than two clusters.
-    ("""[BSC] dimiNew — S: 1
+    ("""[BSC] EveTest — S: 1
 🟢Swap 1.1 BNB (~$742.00)
    to: 12400000.00 ChouChou (CHOUCHOU) 1.24%
 📊 MC: $61,200 - Age: 2 days ago""", NOW - 5 * DAY),
 
-    ("""[BSC] [BUY] - (FOMO BUY) joswe — S: 1
-Fomo: joswe
+    ("""[BSC] [BUY] - (FOMO BUY) alice — S: 1
+Fomo: alice
 Method: swap
 ➡️ SENT: 320.00 USD Coin (USDC)
 ⬅️ RECEIVED: 5100000.00 ChouChou (CHOUCHOU) 0.51%
 📊 MC: $64,000 - Age: 2 days ago""", NOW - 4 * DAY),
 
     # ---- cross-bot merge + dedup scenario ----------------------------------
-    # Logan is configured with BOTH the handle @loganlim_x and the wallet
+    # Trader one is configured with BOTH the handle @trader_one and the wallet
     # 0x1111...aaaa (people.yaml). The same NEWT buy is reported by bot A
     # (handle) and a bot C-style alert (truncated address) with the SAME tx
     # link — it must count once. A second, distinct buy then accumulates.
-    # Expected: one Logan/NEWT position at 0.50 + 0.25 = 0.75%.
-    ("""[BASE] [BUY] - (FOMO BUY) @loganlim_x — S: 1
-Fomo: @loganlim_x
+    # Expected: one Trader one/NEWT position at 0.50 + 0.25 = 0.75%.
+    ("""[BASE] [BUY] - (FOMO BUY) @trader_one — S: 1
+Fomo: @trader_one
 Method: swap
 ➡️ SENT: 1500.00 USD Coin (USDC)
 ⬅️ RECEIVED: 50000000.00 Newton (NEWT) 0.50%

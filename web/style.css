@@ -72,34 +72,58 @@ html, body {
    Toolbar
    ========================================================================= */
 
+/* Two deliberate rows rather than one wrapping line: the top row is
+   "what am I looking at" (brand, filters, ranges, live counts), the bottom
+   is "do something" (actions) plus the day's activity strip. Each row still
+   wraps on its own when the viewport is narrow. */
 .bar {
   position: fixed;
   inset: 0 0 auto 0;
   display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, rgba(20, 27, 40, .97), rgba(12, 17, 26, .97));
+  border-bottom: 1px solid rgba(148, 163, 184, .18);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .04) inset, 0 10px 30px rgba(0, 0, 0, .4);
+  z-index: 10;
+}
+
+.bar .row {
+  display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
-  background: linear-gradient(180deg, rgba(20, 27, 40, .96), rgba(14, 19, 29, .96));
-  border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(12px);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 8px 24px rgba(0, 0, 0, .35);
-  z-index: 10;
+  padding: 7px 12px;
+}
+
+.bar .row + .row {
+  padding-top: 6px;
+  border-top: 1px solid rgba(148, 163, 184, .08);
+  background: rgba(0, 0, 0, .14);
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-right: 6px;
+  gap: 9px;
+  height: 36px;
+  padding-right: 12px;
+  margin-right: 2px;
+  border-right: 1px solid var(--line);
   color: #fff;
   font-weight: 700;
-  font-size: 14px;
-  letter-spacing: .2px;
+  font-size: 14.5px;
+  letter-spacing: -.1px;
   text-decoration: none;
 }
 
-.brand .logo { width: 22px; height: 22px; display: block; }
+.brand .logo {
+  width: 24px;
+  height: 24px;
+  display: block;
+  filter: drop-shadow(0 0 6px rgba(34, 211, 238, .35));
+}
+
 .brand .logo .ring { fill: rgba(34, 211, 238, .14); stroke: var(--token); stroke-width: 2.2; }
 .brand .logo .sat { fill: var(--accent); }
 
@@ -111,13 +135,29 @@ html, body {
   display: flex;
   align-items: center;
   gap: 2px;
-  padding: 3px;
-  background: rgba(10, 14, 21, .55);
+  height: 36px;
+  padding: 2px;
+  background: rgba(6, 9, 14, .6);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 9px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 1px 2px rgba(0, 0, 0, .3);
 }
 
-.group > * + * { border-left: 1px solid var(--line); }
+/* Short hairline between neighbours — not full height, so the pill's
+   outline stays the dominant shape. */
+.group > * + * { position: relative; }
+
+.group > * + *::before {
+  content: "";
+  position: absolute;
+  left: -1.5px;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--line-strong);
+  opacity: .7;
+  pointer-events: none;
+}
 
 .ctl {
   display: flex;
@@ -130,24 +170,24 @@ html, body {
 }
 
 .ctl .cap {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
-  letter-spacing: .5px;
+  letter-spacing: .7px;
   text-transform: uppercase;
   color: var(--faint);
 }
 
 .ctl .val {
-  color: var(--text-2);
+  color: var(--text);
   font-family: var(--mono);
   font-size: 11px;
-  min-width: 46px;
+  min-width: 40px;
   text-align: right;
 }
 
 /* Editable readout beside each slider: looks like a value until you click it. */
 input.val {
-  width: 62px;
+  width: 56px;
   height: 22px;
   padding: 0 4px;
   background: transparent;
@@ -162,6 +202,7 @@ input.val {
   transition: border-color .15s ease, background-color .15s ease;
 }
 
+input.val { color: var(--text); }
 input.val:hover { border-color: var(--line-strong); }
 input.val.invalid { border-color: var(--bad); color: var(--bad); }
 
@@ -186,8 +227,20 @@ select, .btn, .search {
   transition: border-color .15s ease, background-color .15s ease, color .15s ease;
 }
 
-.group select, .group .btn { background: transparent; border-color: transparent; }
-.group select:hover, .group .btn:hover { background: var(--surface-3); }
+.group select, .group .btn {
+  background: transparent;
+  border-color: transparent;
+  border-radius: 6px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.group select:hover, .group .btn:hover {
+  background: rgba(255, 255, 255, .06);
+  border-color: transparent;
+}
+
+.group select:focus { border-color: var(--token-dim); background: var(--surface-2); }
 
 select {
   appearance: none;
@@ -234,15 +287,21 @@ select:focus, .search:focus { border-color: var(--token-dim); outline: none; }
 .btn.accent:hover { border-color: var(--accent); color: #fff; }
 
 /* select + button that act as one control (Rebuild N days → Go) */
-.split { gap: 0; padding: 0; }
-.split select { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
-.split .btn { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; margin-left: -1px; }
+.split { gap: 0; padding: 0 2px; }
+.split select { border-radius: 6px 0 0 6px; }
+.split .btn { border-radius: 0 6px 6px 0; margin-left: -1px; }
+
+/* Actions cluster: the icon toggle sits flush, the text buttons get a bit
+   more air so they read as verbs rather than values. */
+.actions .btn { height: 28px; padding: 0 11px; }
+.actions .btn.icon { width: 30px; padding: 0; }
+.actions .split .btn { padding: 0 10px; }
 
 /* Range slider */
 input[type=range] {
   -webkit-appearance: none;
   appearance: none;
-  width: 72px;
+  width: 62px;
   height: 14px;
   margin: 0;
   background: transparent;
@@ -302,38 +361,56 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
 .switch input:checked + .track::after { transform: translateX(12px); background: #fff; }
 .switch input:focus-visible + .track { outline: 2px solid var(--token); outline-offset: 1px; }
 
-/* Stats */
-.stats { display: flex; align-items: center; gap: 4px; }
-
-.stat {
-  color: var(--muted);
+/* Stats: live counts at the far right of the top row — numbers bright,
+   words quiet, so the eye reads 14 · 43 · 20 before the labels. */
+.stats {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 4px 0 6px;
   font-family: var(--mono);
   font-size: 11px;
   white-space: nowrap;
-  padding: 0 6px;
-  height: 24px;
-  display: inline-flex;
-  align-items: center;
-  border-radius: 6px;
 }
 
+.stat {
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+}
+
+.stat b { color: var(--text); font-weight: 600; margin-right: 4px; }
+.stat i { font-style: normal; color: var(--faint); margin: 0 7px; }
 .stat:empty { display: none; }
+
 #sync { color: var(--faint); }
-#sync .ago { color: var(--text-2); }
+#sync .ago { color: var(--text-2); margin-left: 4px; }
+#sync:not(:empty) + #stat { padding-left: 10px; border-left: 1px solid var(--line); }
 
 /* Activity strip: a day's transactions and $ volume per bucket */
 .activity {
   position: relative;
   flex: 1 1 380px;
   min-width: 320px;
-  height: 38px;
+  height: 36px;
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 0 10px 0 6px;
-  background: rgba(10, 14, 21, .55);
+  background: rgba(6, 9, 14, .6);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: 9px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 1px 2px rgba(0, 0, 0, .3);
+}
+
+.activity-meta::after {
+  content: "";
+  width: 1px;
+  height: 18px;
+  margin-left: 2px;
+  background: var(--line-strong);
+  opacity: .7;
 }
 
 .activity-meta {
@@ -410,7 +487,7 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
 .activity svg {
   flex: 1 1 auto;
   min-width: 0;
-  height: 30px;
+  height: 28px;
   display: block;
   overflow: visible;
   cursor: pointer;
@@ -446,8 +523,7 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
 
 /* Click a bucket: its trades, in the feed's row style */
 .activity-pop {
-  position: absolute;
-  top: calc(100% + 8px);
+  position: fixed;
   z-index: 60;
   width: 400px;
   max-width: calc(100vw - 24px);
@@ -473,6 +549,10 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
 
 .activity-pop-head strong { font-family: var(--mono); font-size: 12px; font-weight: 600; }
 .activity-pop-head .btn.small { margin-left: auto; width: 24px; padding: 0; justify-content: center; }
+
+.activity-pop-tools { display: flex; gap: 6px; }
+.activity-pop-tools .seg { flex: 1; }
+.activity-pop-tools .seg button { height: 22px; padding: 0 7px; font-size: 10.5px; white-space: nowrap; }
 
 .activity-pop-list {
   max-height: min(60vh, 520px);
@@ -694,7 +774,50 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
 .map-btn .k.tokens { background: var(--token); box-shadow: 0 0 8px rgba(34, 211, 238, .7); }
 
 #feedToggle { left: 14px; right: auto; }
+
+/* Contract-address search, beside the Feed button; widens while typing */
+.map-search {
+  position: fixed;
+  top: calc(var(--bar-h) + 10px);
+  left: 92px;
+  z-index: 12;
+  width: 210px;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+  color: var(--text-2);
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  transition: width .15s ease, border-color .15s ease;
+}
+
+.map-search::placeholder { color: var(--muted); }
+.map-search:focus { outline: none; width: 330px; border-color: var(--token); color: #fff; }
 #listToggle { top: calc(var(--bar-h) + 52px); }
+
+/* Arrange toolbar — top centre of the map */
+.arrange {
+  position: fixed;
+  top: calc(var(--bar-h) + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 12;
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+}
+
+.arrange button {
+  flex: none;
+  height: 28px;
+  padding: 0 11px;
+  white-space: nowrap;
+}
 
 /* Users filter dropdown */
 .dropdown {
@@ -748,6 +871,18 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
   font-size: 10.5px;
 }
 
+/* Chain filter rows: brand-coloured dot; chains with nothing on them yet
+ * are listed but dimmed. */
+.chain-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14);
+}
+
+.user-row.empty .user-name { color: var(--muted); }
+
 /* Per-token action buttons (hover over the selected bubble) */
 .node-actions {
   position: fixed;
@@ -780,14 +915,274 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
 }
 
 .node-actions button:hover { background: var(--surface-3); color: #fff; }
+
+/* The chart button is the GMGN wordmark, no label */
+.node-actions button.gmgn { display: flex; align-items: center; padding: 4px 8px; }
+.node-actions button.gmgn img { display: block; height: 16px; width: auto; }
 .node-actions button:disabled { opacity: .4; cursor: default; background: transparent; }
+
+/* Token window (search result that isn't on the graph) */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(4, 8, 14, .72);
+  backdrop-filter: blur(6px);
+}
+
+.modal[hidden] { display: none; }
+
+.modal-box {
+  width: min(1120px, 100%);
+  height: min(740px, 100%);
+  display: flex;
+  flex-direction: column;
+  background: rgba(13, 18, 27, .98);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
+  color: #fff;
+}
+
+.modal-head .btn.close { margin-left: auto; width: 24px; padding: 0; justify-content: center; }
+.modal-head .btn.verify { margin-left: auto; }
+.modal-head .btn.verify ~ .btn { margin-left: 0; } /* later buttons sit beside the first */
+.modal-head .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+/* Open order decides which window is on top — app.js raise() assigns an
+   inline z-index above these defaults every time something is shown. */
+.modal.over { z-index: 61; }
+
+/* Holder window */
+.modal-box.holder { width: min(760px, 100%); height: auto; max-height: 100%; }
+
+/* Suspected new wallets: the top-bar button pulses while unseen ones exist */
+.btn .count {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--flash);
+  color: #1a1400;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+}
+
+.btn .count[hidden] { display: none; }
+
+.btn.pulse {
+  border-color: var(--flash);
+  color: #fff;
+  animation: hg-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes hg-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(253, 230, 138, .6); }
+  50% { box-shadow: 0 0 0 7px rgba(253, 230, 138, 0); }
+}
+
+.sug-row {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .03);
+  border-left: 3px solid transparent;
+}
+
+.sug-row.new { border-left-color: var(--flash); }
+.sug-row .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sug-row .head .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+.sug-row .who { color: #fff; font-weight: 600; }
+.sug-row .arrow { color: var(--muted); }
+.sug-row .addr { font-family: var(--mono); color: var(--text); }
+.sug-row .when { margin-left: auto; color: var(--faint); font-size: 10.5px; white-space: nowrap; }
+.sug-row .toks { display: flex; flex-wrap: wrap; gap: 4px; }
+.sug-row .tok {
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--surface-3);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-2);
+}
+.sug-row .actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.sug-row .actions a.btn { text-decoration: none; }
+.sug-row .actions .btn.primary { border-color: var(--accent); color: #fff; }
+
+/* Feed pill for wallet-to-wallet moves */
+.pill.xfer { background: rgba(96, 165, 250, .16); color: #93c5fd; }
+
+/* Explorer links for the wallet, one per chain it has traded on */
+.hm-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px 0;
+  font-size: 11px;
+}
+
+.hm-links[hidden] { display: none; }
+.hm-links .cap { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: .5px; margin-right: 2px; }
+.hm-links .addr { font-family: var(--mono); color: var(--text-2); margin-right: 4px; }
+.hm-links a.btn { text-decoration: none; }
+.hm-links a.btn .badge { margin-right: 5px; padding: 0 5px; font-size: 9.5px; }
+
+.holder-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+  font-size: 11.5px;
+}
+
+.holder-body h4 {
+  margin: 0;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+
+.focus-card {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background: rgba(34, 211, 238, .05);
+}
+
+.focus-card .head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.focus-card .head .sym { color: #fff; font-weight: 700; font-size: 14px; }
+.focus-card .head .mc { color: var(--muted); font-family: var(--mono); }
+.focus-card .head .btn { margin-left: auto; }
+.focus-card .kv { grid-template-columns: 110px 1fr; }
+
+.pill.holding { background: rgba(34, 197, 94, .18); color: #86efac; }
+.pill.exited { background: rgba(148, 163, 184, .16); color: var(--muted); }
+
+.tok-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 2px 12px;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .03);
+  cursor: pointer;
+}
+
+.tok-row:hover { background: rgba(34, 211, 238, .07); }
+.tok-row.sold { opacity: .6; }
+.tok-row .sym { color: var(--text); font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.tok-row .num { font-family: var(--mono); color: var(--text); text-align: right; }
+.tok-row .num small { display: block; color: var(--muted); font-size: 10px; font-weight: 400; }
+.tok-row .meta { grid-column: 1 / -1; color: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+.tok-row .ver { color: var(--ok); }
+.tok-row .ver.stale { color: var(--muted); }
+.tok-row .ver.off { color: var(--bad); }
+
+.holder-body details summary { cursor: pointer; color: var(--muted); }
+.holder-body details .tok-row { margin-top: 6px; }
+
+.pos { color: var(--ok); }
+.neg { color: var(--bad); }
+
+
+.modal-body { flex: 1; display: flex; min-height: 0; }
+
+.modal-body svg {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  background:
+    radial-gradient(rgba(148, 163, 184, .07) .8px, transparent 1px) 0 0 / 22px 22px;
+}
+
+.modal-side {
+  width: 360px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  font-size: 11.5px;
+}
+
+.modal-side h4 {
+  margin: 0;
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+}
+
+.kv {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 5px 10px;
+  margin: 0;
+}
+
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; color: var(--text); font-family: var(--mono); font-size: 11px; word-break: break-all; }
+.kv dd a { color: var(--token); text-decoration: none; }
+.kv dd a:hover { text-decoration: underline; }
+
+.modal-note {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(249, 115, 22, .12);
+  color: #fbbf7a;
+}
+
+.holder-row {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, .03);
+}
+
+.holder-row.sold { opacity: .6; }
+.holder-row .dot { width: 10px; height: 10px; border-radius: 50%; }
+.holder-row .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.holder-row .pct { font-family: var(--mono); color: var(--text); }
+.holder-row .meta { grid-column: 2 / 4; color: var(--muted); font-family: var(--mono); font-size: 10.5px; line-height: 1.5; }
+.holder-row .meta .pos { color: var(--ok); }
+.holder-row .meta .neg { color: var(--bad); }
+
+.modal-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 /* Toasts */
 .toasts {
   position: fixed;
   top: calc(var(--bar-h) + 98px);
   right: 14px;
-  z-index: 30;
+  z-index: 1100; /* notifications sit above every raised layer */
   display: grid;
   gap: 8px;
   max-width: 340px;
@@ -829,7 +1224,7 @@ input[type=range]::-moz-range-thumb { width: 10px; height: 10px; border-radius: 
 /* Tooltip */
 .tip {
   position: fixed;
-  z-index: 20;
+  z-index: 1000; /* hover tooltips sit above every raised layer */
   max-width: 300px;
   padding: 10px 12px;
   background: rgba(12, 17, 26, .97);

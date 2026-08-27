@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from . import chains as chains_mod
 from . import positions as positions_mod
 from .config import person_colors
 from .db import counts, session as db_session
@@ -21,9 +22,66 @@ from .paths import WEB_DIR
 app = FastAPI(title="HotGraph")
 
 
+def _person_node(p, colors, size_pct: float) -> dict:
+    token_id = f"token:{p['chain']}:{p['token_key']}"
+    return {
+        "id": f"pos:{p['chain']}:{p['token_key']}:{p['trader_key']}",
+        "kind": "person",
+        "token_id": token_id,
+        "trader_key": p["trader_key"],
+        "person": p["person"],
+        "handle": p["trader_handle"],
+        "color": colors.get(p["person"]),
+        "value": size_pct,
+        "pct_supply": p["pct_supply"],
+        "peak_pct": p["peak_pct"],
+        "bought_pct": p["bought_pct"],
+        "sold_pct": p["sold_pct"],
+        "status": p["status"],
+        "confidence": p["confidence"],
+        "invested_usd": p["invested_usd"],
+        "realized_usd": p["realized_usd"],
+        "pnl_usd": p["pnl_usd"],
+        "entry_mcap_usd": p["entry_mcap_usd"],
+        "avg_entry_mcap_usd": p["avg_entry_mcap_usd"],
+        "n_events": p["n_events"],
+        "first_seen": p["first_seen"],
+        "last_seen": p["last_seen"],
+    }
+
+
+def _token_node(t, st) -> dict:
+    n_holding = st["n_holding"] if st else 0
+    return {
+        "id": f"token:{t['chain']}:{t['token_key']}",
+        "kind": "token",
+        "symbol": t["symbol"] or str(t["token_key"]).replace("sym:", ""),
+        "name": t["name"],
+        "chain": t["chain"],
+        "chain_tag": t["chain_tag"],
+        "token_key": t["token_key"],
+        "value": t["last_mcap_usd"] or 0.0,
+        "mcap_usd": t["last_mcap_usd"],
+        "fdv_usd": t["fdv_usd"],
+        "mcap_as_of": t["mcap_as_of"],
+        "resolved": not str(t["token_key"]).startswith("sym:"),
+        "n_events": t["n_events"],
+        "n_holders": n_holding,
+        "n_positions": st["n_positions"] if st else 0,
+        "last_action": st["last_action"] if st else None,
+        # Everyone we track has exited — the token is history, not book.
+        "dead": n_holding == 0,
+    }
+
+
+# Sold bubbles size off their peak so they don't collapse to nothing.
+def _size_pct(p) -> float:
+    return (p["peak_pct"] if p["status"] == "SOLD" else p["pct_supply"]) or 0.0
+
+
 @app.get("/api/graph")
 def graph(
-    chain: str | None = None,
+    chain: str | None = None,  # comma-separated chain tags (BASE,RH...) or a family (evm)
     include_sold: bool = True,
     min_mcap: float = 0.0,
     max_mcap: float = 0.0,    # 0 = no cap
@@ -55,14 +113,14 @@ def graph(
             )
         }
 
+        chain_sql, chain_params = chains_mod.sql_clause(chain, "t.chain", "t.chain_tag")
         tok_rows = conn.execute(
-            """SELECT t.chain, t.chain_tag, t.token_key, t.symbol, t.name,
+            f"""SELECT t.chain, t.chain_tag, t.token_key, t.symbol, t.name,
                       t.last_mcap_usd, t.fdv_usd, t.mcap_as_of, t.n_events
                  FROM tokens t
-                WHERE (? IS NULL OR t.chain = ?)
-                  AND COALESCE(t.last_mcap_usd, 0) >= ?
-                  AND (? <= 0 OR COALESCE(t.last_mcap_usd, 0) <= ?)""",
-            (chain, chain, min_mcap, max_mcap, max_mcap),
+                WHERE COALESCE(t.last_mcap_usd, 0) >= ?
+                  AND (? <= 0 OR COALESCE(t.last_mcap_usd, 0) <= ?){chain_sql}""",
+            (min_mcap, max_mcap, max_mcap, *chain_params),
         ).fetchall()
 
         def _metric(t) -> float:
@@ -109,14 +167,17 @@ def graph(
             tok_rows = tok_rows[:top]
         allowed = {(t["chain"], t["token_key"]) for t in tok_rows}
 
+        # Positions carry no chain_tag; narrowing by family is enough here
+        # since every row is checked against the drawn tokens below anyway.
+        fam_sql, fam_params = chains_mod.sql_clause(chain, "chain", None)
         pos_rows = conn.execute(
-            """SELECT chain, token_key, trader_key, person, trader_handle,
+            f"""SELECT chain, token_key, trader_key, person, trader_handle,
                       pct_supply, peak_pct, bought_pct, sold_pct, status, confidence,
                       invested_usd, realized_usd, pnl_usd, entry_mcap_usd,
                       avg_entry_mcap_usd, n_events, first_seen, last_seen
                  FROM positions
-                WHERE (? IS NULL OR chain = ?)""",
-            (chain, chain),
+                WHERE 1 = 1{fam_sql}""",
+            fam_params,
         ).fetchall()
 
         stats = counts(conn)
@@ -136,68 +197,21 @@ def graph(
             continue
         if not include_sold and p["status"] == "SOLD":
             continue
-        # Sold bubbles size off their peak so they don't collapse to nothing.
-        size_pct = p["peak_pct"] if p["status"] == "SOLD" else p["pct_supply"]
-        size_pct = size_pct or 0.0
+        size_pct = _size_pct(p)
         if size_pct < min_pct:
             continue
 
         tkey = (p["chain"], p["token_key"])
-        token_id = f"token:{p['chain']}:{p['token_key']}"
-        node_id = f"pos:{p['chain']}:{p['token_key']}:{p['trader_key']}"
-
-        nodes.append({
-            "id": node_id,
-            "kind": "person",
-            "token_id": token_id,
-            "person": p["person"],
-            "handle": p["trader_handle"],
-            "color": colors.get(p["person"]),
-            "value": size_pct,
-            "pct_supply": p["pct_supply"],
-            "peak_pct": p["peak_pct"],
-            "bought_pct": p["bought_pct"],
-            "sold_pct": p["sold_pct"],
-            "status": p["status"],
-            "confidence": p["confidence"],
-            "invested_usd": p["invested_usd"],
-            "realized_usd": p["realized_usd"],
-            "pnl_usd": p["pnl_usd"],
-            "entry_mcap_usd": p["entry_mcap_usd"],
-            "avg_entry_mcap_usd": p["avg_entry_mcap_usd"],
-            "n_events": p["n_events"],
-            "first_seen": p["first_seen"],
-            "last_seen": p["last_seen"],
-        })
-        links.append({"source": node_id, "target": token_id, "status": p["status"]})
+        node = _person_node(p, colors, size_pct)
+        nodes.append(node)
+        links.append({"source": node["id"], "target": node["token_id"], "status": p["status"]})
         live_tokens.add(tkey)
 
     for t in tok_rows:
         tkey = (t["chain"], t["token_key"])
         if tkey not in live_tokens:
             continue  # a token with no drawable positions isn't worth a bubble
-        st = tstats.get(tkey)
-        n_holding = st["n_holding"] if st else 0
-        nodes.append({
-            "id": f"token:{t['chain']}:{t['token_key']}",
-            "kind": "token",
-            "symbol": t["symbol"] or str(t["token_key"]).replace("sym:", ""),
-            "name": t["name"],
-            "chain": t["chain"],
-            "chain_tag": t["chain_tag"],
-            "token_key": t["token_key"],
-            "value": t["last_mcap_usd"] or 0.0,
-            "mcap_usd": t["last_mcap_usd"],
-            "fdv_usd": t["fdv_usd"],
-            "mcap_as_of": t["mcap_as_of"],
-            "resolved": not str(t["token_key"]).startswith("sym:"),
-            "n_events": t["n_events"],
-            "n_holders": n_holding,
-            "n_positions": st["n_positions"] if st else 0,
-            "last_action": st["last_action"] if st else None,
-            # Everyone we track has exited — the token is history, not book.
-            "dead": n_holding == 0,
-        })
+        nodes.append(_token_node(t, tstats.get(tkey)))
 
     return JSONResponse({
         "nodes": nodes,
@@ -211,14 +225,17 @@ ACT_BASE = 1800                        # snapshot resolution: 30 minutes
 ACT_BUCKETS = (1800, 3600, 7200, 10800, 21600, 28800, 43200)
 
 
-def _dedup_cte() -> str:
+def _dedup_cte(chain: str | None, start: int, end: int) -> tuple[str, list]:
     """Trades deduplicated by tx hash — two bots reporting the same swap
-    must count as one transaction and one lot of dollars."""
-    return """WITH dedup AS (
+    must count as one transaction and one lot of dollars. Returns the CTE
+    and its bound parameters."""
+    chain_sql, chain_params = chains_mod.sql_clause(chain)
+    return (f"""WITH dedup AS (
                   SELECT MIN(id) AS id FROM events
-                   WHERE ts >= ? AND ts < ? AND (? IS NULL OR chain = ?)
+                   WHERE ts >= ? AND ts < ?{chain_sql}
+                     AND side IN ('BUY', 'SELL')
                    GROUP BY COALESCE(tx_hash, 'id:' || id)
-              )"""
+              )""", [start, end, *chain_params])
 
 
 @app.get("/api/activity")
@@ -235,17 +252,18 @@ def activity(start: int, bucket: int = ACT_BASE, chain: str | None = None):
         bucket = min(ACT_BUCKETS, key=lambda b: abs(b - bucket))
     end = start + 86400
     n = 86400 // ACT_BASE
-    chain_key = chain or "all"
+    chain_key = chains_mod.filter_key(chain)
+    cte, cte_params = _dedup_cte(chain, start, end)
     with db_session() as conn:
         rows = conn.execute(
-            _dedup_cte() + """
+            cte + """
                SELECT (e.ts - ?) / ? AS b,
                       COUNT(*)                       AS tx,
                       SUM(e.side = 'BUY')            AS buys,
                       SUM(COALESCE(e.amount_usd, 0)) AS usd
                  FROM events e JOIN dedup d ON d.id = e.id
                 GROUP BY b""",
-            (start, end, chain, chain, start, ACT_BASE),
+            (*cte_params, start, ACT_BASE),
         ).fetchall()
 
         base = [{"tx": 0, "buys": 0, "usd": 0.0} for _ in range(n)]
@@ -302,15 +320,16 @@ def activity_txs(start: int, end: int, chain: str | None = None, limit: int = 40
     """The individual trades inside one bucket of the activity strip, newest
     first, in the feed's item shape so the page draws them the same way."""
     limit = max(1, min(limit, 1000))
+    cte, cte_params = _dedup_cte(chain, start, end)
     with db_session() as conn:
         rows = conn.execute(
-            _dedup_cte() + """
+            cte + """
                SELECT e.ts, e.side, e.is_exit, e.token_symbol, e.token_key,
                       e.chain, e.chain_tag, e.trader_handle, e.trader_key,
                       e.pct_supply, e.amount_usd, e.mcap_usd, e.source, e.tx_hash, e.raw_id
                  FROM events e JOIN dedup d ON d.id = e.id
                 ORDER BY e.ts DESC LIMIT ?""",
-            (start, end, chain, chain, limit),
+            (*cte_params, limit),
         ).fetchall()
     items = [{
         "ts": r["ts"],
@@ -400,6 +419,8 @@ def health():
         # "data moved, refetch", closing the gap between event insert and
         # rebuild completing.
         out["built_at"] = get_meta(conn, "positions_built_at")
+        # Unseen suspected-wallet suggestions — the top-bar button pulses.
+        out["wallet_suggestions_new"] = _new_suggestion_count(conn)
         # Recent full-exit removals, oldest first — the page toasts the ones
         # with ids it hasn't seen yet.
         out["eliminations"] = [
@@ -423,15 +444,18 @@ def feed(kind: str = "all", limit: int = 100):
     items: list[dict] = []
 
     with db_session() as conn:
-        if kind in ("buys", "sells", "swaps", "all"):
+        if kind in ("buys", "sells", "swaps", "transfers", "all"):
             side_clause = {
                 "buys": "e.side = 'BUY'",
                 "sells": "e.side = 'SELL'",
+                "swaps": "e.side IN ('BUY', 'SELL')",
+                "transfers": "e.side IN ('TRANSFER_OUT', 'TRANSFER_IN')",
             }.get(kind, "1=1")
             for r in conn.execute(
                 f"""SELECT e.ts, e.side, e.is_exit, e.token_symbol, e.token_key,
                            e.chain, e.chain_tag, e.trader_handle, e.trader_key,
-                           e.pct_supply, e.amount_usd, e.mcap_usd, e.source, e.raw_id
+                           e.pct_supply, e.amount_usd, e.mcap_usd, e.source, e.raw_id,
+                           e.counterparty
                       FROM events e
                      WHERE {side_clause}
                        AND NOT EXISTS (SELECT 1 FROM token_blacklist b
@@ -454,6 +478,7 @@ def feed(kind: str = "all", limit: int = 100):
                     "mcap_usd": r["mcap_usd"],
                     "source": r["source"],
                     "raw_id": r["raw_id"],
+                    "counterparty": r["counterparty"],
                 })
 
         if kind in ("other", "all"):
@@ -490,6 +515,298 @@ def feed(kind: str = "all", limit: int = 100):
 # name, stored in person_map; positions are rebuilt so their events combine
 # into a single bubble per token.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Suspected new wallets
+#
+# A tracked wallet sending tokens somewhere with nothing coming back is a
+# transfer (parsers.base TRANSFER_OUT), and the recipient is very often
+# another wallet of the same person. When that recipient is not tracked —
+# no bot alerts on it, no merge maps it — it is suggested here, derived from
+# the events themselves so it survives rebuilds. Merging (existing
+# /api/merge) or dismissing makes it go away; "seen" only stops the pulse.
+# ---------------------------------------------------------------------------
+
+_SUGGEST_WHERE = """
+      e.side = 'TRANSFER_OUT'
+      AND e.counterparty IS NOT NULL
+      AND e.counterparty NOT LIKE 'trunc:%'
+      AND NOT EXISTS (SELECT 1 FROM person_map p WHERE p.trader_key = e.counterparty)
+      AND NOT EXISTS (SELECT 1 FROM wallet_dismissed d WHERE d.trader_key = e.counterparty)
+      AND NOT EXISTS (SELECT 1 FROM events t
+                       WHERE t.trader_key = e.counterparty AND t.side IN ('BUY', 'SELL'))
+"""
+
+
+def _suggestions_seen_id(conn) -> int:
+    from .db import get_meta
+    v = get_meta(conn, "wallet_suggestions_seen_id")
+    return int(v) if v else 0
+
+
+def _new_suggestion_count(conn) -> int:
+    return conn.execute(
+        f"SELECT COUNT(DISTINCT e.counterparty) FROM events e WHERE e.id > ? AND {_SUGGEST_WHERE}",
+        (_suggestions_seen_id(conn),),
+    ).fetchone()[0]
+
+
+@app.get("/api/wallet_suggestions")
+def wallet_suggestions():
+    """Untracked wallets that tracked people moved tokens to, newest first,
+    one entry per wallet with every transfer into it."""
+    with db_session() as conn:
+        seen = _suggestions_seen_id(conn)
+        rows = conn.execute(
+            f"""SELECT e.id, e.ts, e.chain, e.chain_tag, e.counterparty, e.trader_key,
+                       e.trader_handle, e.token_key, e.token_symbol, e.pct_supply,
+                       e.amount_tokens, e.mcap_usd, e.raw_id
+                  FROM events e
+                 WHERE {_SUGGEST_WHERE}
+                 ORDER BY e.ts DESC"""
+        ).fetchall()
+        mapped = {r["trader_key"]: r["person"] for r in conn.execute("SELECT trader_key, person FROM person_map")}
+        pos_person = {
+            r["trader_key"]: r["person"]
+            for r in conn.execute("SELECT DISTINCT trader_key, person FROM positions WHERE person IS NOT NULL")
+        }
+        colors = person_colors()
+
+    groups: dict[str, dict] = {}
+    for r in rows:
+        w = r["counterparty"]
+        sender = r["trader_key"]
+        person = mapped.get(sender) or pos_person.get(sender) or r["trader_handle"] or sender
+        g = groups.get(w)
+        if g is None:
+            g = groups[w] = {
+                "wallet": w, "chain": r["chain"], "chain_tags": [], "senders": [],
+                "tokens": [], "first_ts": r["ts"], "last_ts": r["ts"], "max_id": r["id"], "n": 0,
+            }
+        g["n"] += 1
+        g["first_ts"] = min(g["first_ts"], r["ts"])
+        g["last_ts"] = max(g["last_ts"], r["ts"])
+        g["max_id"] = max(g["max_id"], r["id"])
+        tag = chains_mod.canonical_tag(r["chain_tag"])
+        if tag and tag not in g["chain_tags"]:
+            g["chain_tags"].append(tag)
+        if not any(s["key"] == sender for s in g["senders"]):
+            g["senders"].append({
+                "key": sender, "person": person, "handle": r["trader_handle"],
+                "color": colors.get(person),
+            })
+        g["tokens"].append({
+            "chain": r["chain"], "chain_tag": r["chain_tag"], "token_key": r["token_key"],
+            "symbol": r["token_symbol"] or str(r["token_key"]).replace("sym:", ""),
+            "pct": r["pct_supply"], "amount": r["amount_tokens"], "mcap_usd": r["mcap_usd"],
+            "ts": r["ts"], "raw_id": r["raw_id"],
+        })
+    out = sorted(groups.values(), key=lambda g: -g["last_ts"])
+    for g in out:
+        g["new"] = g["max_id"] > seen
+    return {"suggestions": out, "new": sum(1 for g in out if g["new"]), "seen_id": seen}
+
+
+@app.post("/api/wallet_suggestions/seen")
+def wallet_suggestions_seen():
+    """The user opened the list: everything up to now stops counting as new."""
+    from .db import set_meta
+    with db_session() as conn:
+        top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()[0]
+        set_meta(conn, "wallet_suggestions_seen_id", int(top))
+    return {"ok": True, "seen_id": int(top)}
+
+
+class DismissRequest(BaseModel):
+    trader_key: str
+
+
+@app.post("/api/wallet_suggestions/dismiss")
+def wallet_suggestions_dismiss(req: DismissRequest):
+    """Not their wallet (an exchange deposit, a friend): hide it for good."""
+    key = req.trader_key.strip()
+    if not key:
+        raise HTTPException(400, "trader_key is required")
+    with db_session() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO wallet_dismissed (trader_key, ts) VALUES (?, ?)",
+            (key, int(time.time())),
+        )
+    return {"ok": True, "trader_key": key}
+
+
+_TOKEN_COLS = """t.chain, t.chain_tag, t.token_key, t.symbol, t.name,
+                 t.last_mcap_usd, t.fdv_usd, t.mcap_as_of, t.n_events"""
+
+
+@app.get("/api/token")
+def token_lookup(q: str):
+    """One token by contract address (or ticker), with every position ever
+    taken in it — no filters, no top-N, hidden or not. Feeds the search
+    box when the token isn't among the drawn bubbles."""
+    key = q.strip()
+    if not key:
+        raise HTTPException(400, "empty query")
+    colors = person_colors()
+    with db_session() as conn:
+        # Address first (EVM keys are stored lower-case), then ticker; the
+        # busiest match wins when a ticker is reused across chains.
+        tok = conn.execute(
+            f"""SELECT {_TOKEN_COLS} FROM tokens t
+                 WHERE t.token_key IN (?, ?)
+                 ORDER BY t.n_events DESC LIMIT 1""",
+            (key, key.lower()),
+        ).fetchone()
+        if tok is None:
+            tok = conn.execute(
+                f"""SELECT {_TOKEN_COLS} FROM tokens t
+                     WHERE LOWER(t.symbol) = LOWER(?) OR LOWER(t.token_key) = LOWER(?)
+                     ORDER BY t.n_events DESC LIMIT 1""",
+                (key, f"sym:{key}"),
+            ).fetchone()
+        if tok is None:
+            raise HTTPException(404, f"no token matches {key!r}")
+
+        tkey = (tok["chain"], tok["token_key"])
+        st = conn.execute(
+            """SELECT SUM(status = 'HOLDING') AS n_holding,
+                      COUNT(*)                AS n_positions,
+                      MAX(last_seen)          AS last_action,
+                      MIN(first_seen)         AS first_seen
+                 FROM positions WHERE chain = ? AND token_key = ?""",
+            tkey,
+        ).fetchone()
+        pos_rows = conn.execute(
+            """SELECT chain, token_key, trader_key, person, trader_handle,
+                      pct_supply, peak_pct, bought_pct, sold_pct, status, confidence,
+                      invested_usd, realized_usd, pnl_usd, entry_mcap_usd,
+                      avg_entry_mcap_usd, n_events, first_seen, last_seen
+                 FROM positions
+                WHERE chain = ? AND token_key = ?
+                ORDER BY (status = 'HOLDING') DESC, COALESCE(pct_supply, 0) DESC""",
+            tkey,
+        ).fetchall()
+        hidden = conn.execute(
+            "SELECT 1 FROM token_blacklist WHERE chain = ? AND token_key = ?", tkey
+        ).fetchone() is not None
+
+    token = _token_node(tok, st if st and st["n_positions"] else None)
+    token["first_seen"] = st["first_seen"] if st else None
+    token["hidden"] = hidden
+    nodes = [token]
+    links = []
+    for p in pos_rows:
+        node = _person_node(p, colors, _size_pct(p))
+        nodes.append(node)
+        links.append({"source": node["id"], "target": node["token_id"], "status": p["status"]})
+    return {"token": token, "nodes": nodes, "links": links}
+
+
+_WALLET_RE = r"0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44}"
+
+
+@app.get("/api/holder")
+def holder_lookup(trader_key: str, chain: str | None = None, token_key: str | None = None):
+    """Everything about one tracked wallet: the position it was clicked on
+    (`chain` + `token_key`), and every token it has ever taken a position
+    in, current holdings first. On-chain verifications ride along."""
+    import re as _re
+    colors = person_colors()
+    with db_session() as conn:
+        pos_rows = conn.execute(
+            """SELECT chain, token_key, trader_key, person, trader_handle,
+                      pct_supply, peak_pct, bought_pct, sold_pct, status, confidence,
+                      invested_usd, realized_usd, pnl_usd, entry_mcap_usd,
+                      avg_entry_mcap_usd, n_events, first_seen, last_seen
+                 FROM positions
+                WHERE trader_key = ?
+                ORDER BY (status = 'HOLDING') DESC, last_seen DESC""",
+            (trader_key,),
+        ).fetchall()
+        if not pos_rows:
+            raise HTTPException(404, "no positions for this trader")
+        keys = {(p["chain"], p["token_key"]) for p in pos_rows}
+        toks = {}
+        stats = {}
+        for c, k in keys:
+            t = conn.execute(f"SELECT {_TOKEN_COLS} FROM tokens t WHERE t.chain = ? AND t.token_key = ?", (c, k)).fetchone()
+            if t is not None:
+                toks[(c, k)] = t
+            stats[(c, k)] = conn.execute(
+                """SELECT SUM(status = 'HOLDING') AS n_holding, COUNT(*) AS n_positions,
+                          MAX(last_seen) AS last_action
+                     FROM positions WHERE chain = ? AND token_key = ?""",
+                (c, k),
+            ).fetchone()
+        verified = {
+            (r["chain"], r["token_key"]): {"pct": r["pct"], "ts": r["ts"]}
+            for r in conn.execute(
+                "SELECT chain, token_key, pct, ts FROM verifications WHERE trader_key = ?",
+                (trader_key,),
+            )
+        }
+
+    entries = []
+    for p in pos_rows:
+        k = (p["chain"], p["token_key"])
+        t = toks.get(k)
+        entry = _person_node(p, colors, _size_pct(p))
+        entry["token"] = _token_node(t, stats.get(k)) if t is not None else {
+            "id": f"token:{k[0]}:{k[1]}", "kind": "token", "symbol": str(k[1]).replace("sym:", ""),
+            "chain": k[0], "chain_tag": None, "token_key": k[1], "resolved": not str(k[1]).startswith("sym:"),
+            "mcap_usd": None, "fdv_usd": None, "n_holders": 0, "n_positions": 0, "last_action": None, "dead": True,
+        }
+        entry["verified"] = verified.get(k)
+        entries.append(entry)
+
+    focus = next((e for e in entries if e["token"]["chain"] == chain and str(e["token"]["token_key"]) == str(token_key)), None)
+    first = pos_rows[0]
+    return {
+        "trader_key": trader_key,
+        "person": first["person"],
+        "handle": first["trader_handle"],
+        "color": colors.get(first["person"]),
+        "is_wallet": bool(_re.fullmatch(_WALLET_RE, trader_key)),
+        "focus": focus,
+        "positions": entries,
+        "n_holding": sum(1 for e in entries if e["status"] == "HOLDING"),
+        "n_sold": sum(1 for e in entries if e["status"] != "HOLDING"),
+    }
+
+
+@app.get("/api/chains")
+def chains_list():
+    """Every supported chain, plus any tag in the data the registry doesn't
+    know, with how many tokens sit on it — feeds the Chain filter. Alias
+    tags (ROBINHOOD vs RH) are folded into one entry."""
+    with db_session() as conn:
+        rows = conn.execute(
+            """SELECT t.chain, t.chain_tag, COUNT(*) AS n_tokens,
+                      SUM(EXISTS (SELECT 1 FROM positions p
+                                   WHERE p.chain = t.chain AND p.token_key = t.token_key
+                                     AND p.status = 'HOLDING')) AS n_live
+                 FROM tokens t
+                GROUP BY t.chain, t.chain_tag"""
+        ).fetchall()
+    counts: dict[str, dict] = {}
+    for r in rows:
+        tag = chains_mod.canonical_tag(r["chain_tag"]) or (
+            "SOL" if r["chain"] == "solana" else None)
+        if not tag:
+            continue  # untagged EVM rows can't be told apart by chain
+        c = counts.setdefault(tag, {"n_tokens": 0, "n_live": 0})
+        c["n_tokens"] += r["n_tokens"]
+        c["n_live"] += r["n_live"] or 0
+    out = [
+        {"tag": c.tag, "name": c.name, "family": c.family,
+         **counts.pop(c.tag, {"n_tokens": 0, "n_live": 0})}
+        for c in chains_mod.CHAINS
+    ]
+    for tag, n in sorted(counts.items()):
+        out.append({"tag": tag, "name": tag,
+                    "family": chains_mod.chain_from_tag(tag) or "evm", **n})
+    return {"chains": out}
 
 
 @app.get("/api/persons")
@@ -766,6 +1083,77 @@ def verify(req: VerifyRequest):
         VERIFY_STATE.update(active=False)
 
 
+class VerifyWalletRequest(BaseModel):
+    trader_key: str
+    tokens: list[dict]   # [{chain, token_key}, ...] — address-keyed only
+
+
+@app.post("/api/verify_wallet")
+def verify_wallet(req: VerifyWalletRequest):
+    """One wallet's real share of each given token, straight from the
+    chain. Per-token problems (unknown token, RPC down) are reported in
+    the results, not fatal. Sync route so the RPC work happens off the
+    event loop; positions are rebuilt once at the end."""
+    import re as _re
+    from .verify import verify_holdings
+
+    wallet = req.trader_key.strip()
+    if not _re.fullmatch(_WALLET_RE, wallet):
+        raise HTTPException(400, "not a full wallet address — nothing to check on-chain")
+    wanted = list(dict.fromkeys(
+        (t.get("chain"), str(t.get("token_key")))
+        for t in req.tokens
+        if t.get("chain") and t.get("token_key") and not str(t.get("token_key")).startswith("sym:")
+    ))
+    if not wanted:
+        raise HTTPException(400, "no address-keyed tokens to check")
+    if VERIFY_STATE["active"]:
+        raise HTTPException(409, "a verification is already running")
+
+    VERIFY_STATE.update(active=True, done=0, total=len(wanted), symbol="",
+                        wallets_done=0, wallets_total=1)
+    results = []
+    ok = 0
+    now = int(time.time())
+    try:
+        for i, (chain, key) in enumerate(wanted):
+            VERIFY_STATE.update(done=i, wallets_done=0, wallets_total=1)
+            with db_session() as conn:
+                tok = conn.execute(
+                    "SELECT chain_tag, symbol FROM tokens WHERE chain = ? AND token_key = ?",
+                    (chain, key),
+                ).fetchone()
+            base = {"chain": chain, "token_key": key,
+                    "symbol": tok["symbol"] if tok else None, "pct": None, "error": None}
+            if tok is None:
+                results.append({**base, "error": "unknown token"})
+                continue
+            VERIFY_STATE["symbol"] = tok["symbol"] or ""
+            checks, fatal = verify_holdings(
+                chain, tok["chain_tag"], key, [wallet], progress=_wallet_progress)
+            c = checks[0] if checks else None
+            if fatal or c is None or c.pct is None:
+                results.append({**base, "error": fatal or (c.error if c else "no result")})
+                continue
+            ok += 1
+            with db_session() as conn:
+                conn.execute(
+                    """INSERT INTO verifications (chain, token_key, trader_key, pct, balance, ts)
+                       VALUES (?,?,?,?,?,?)
+                       ON CONFLICT(chain, token_key, trader_key)
+                       DO UPDATE SET pct=excluded.pct, balance=excluded.balance, ts=excluded.ts""",
+                    (chain, key, wallet, c.pct, c.balance, now),
+                )
+            results.append({**base, "pct": c.pct, "balance": c.balance})
+        VERIFY_STATE["done"] = len(wanted)
+    finally:
+        VERIFY_STATE.update(active=False, done=0, total=0, symbol="",
+                            wallets_done=0, wallets_total=0)
+    if ok:
+        positions_mod.run()
+    return {"ok": True, "checked": len(wanted), "verified": ok, "results": results}
+
+
 class VerifyAllRequest(BaseModel):
     tokens: list[dict]   # [{chain, token_key}, ...] — address-keyed only
 
@@ -832,6 +1220,35 @@ def verify_all(req: VerifyAllRequest):
 # client. Opening a second client on the same session file here would trigger
 # AUTH_KEY_DUPLICATED — never do that. Stays None under standalone uvicorn.
 tg_client = None
+
+
+@app.post("/api/logout")
+async def logout():
+    """Sign this HotGraph device out of Telegram and destroy its session.
+
+    Telethon's log_out() revokes the authorization server-side, disconnects,
+    and deletes data/hotgraph.session. The disconnect ends hotgraph.run's
+    listener, which takes the server down with it (exit code 3) — start.py
+    sees that and asks for a fresh login. Alerts and positions in the DB are
+    untouched; only the Telegram login goes.
+    """
+    import asyncio
+
+    if tg_client is None:
+        raise HTTPException(
+            400,
+            "no live Telegram session in this process — start HotGraph with "
+            "python start.py (or python -m hotgraph.run) to sign out",
+        )
+    if REBUILD_STATE["active"]:
+        raise HTTPException(409, "a rebuild is running — wait for it to finish")
+
+    async def _later():
+        await asyncio.sleep(0.3)  # let this response reach the page first
+        await tg_client.log_out()
+
+    asyncio.create_task(_later())
+    return {"ok": True}
 
 # In-process progress for the running rebuild, polled by /api/rebuild/status.
 # fetch: done = messages scanned on Telegram (total unknown -> indeterminate);

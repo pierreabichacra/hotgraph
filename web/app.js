@@ -16,6 +16,12 @@ window.addEventListener("error", (e) => {
   document.title = `ERR ${e.message}`;
 });
 
+// Floating layers (menus, modals, popovers) stack in the order they were
+// opened rather than in CSS order: whatever opened last goes on top, so a
+// window launched from inside another window never lands behind it.
+let topZ = 100;
+function raise(el) { el.style.zIndex = ++topZ; }
+
 // Bubble fills are radial gradients so a token reads as a lit disc rather
 // than a flat ring; CSS references these ids via fill: url(#…).
 const defs = svg.append("defs");
@@ -35,23 +41,55 @@ const defs = svg.append("defs");
  * show their tag letters on a brand-coloured disc. */
 const CHAINS = {
   SOL:       { color: "#9945ff", glyph: "sol" },
-  SOLANA:    { color: "#9945ff", glyph: "sol" },
   ETH:       { color: "#627eea", glyph: "eth" },
   BSC:       { color: "#f0b90b", glyph: "bnb", ink: "#1a1a1a" },
-  BNB:       { color: "#f0b90b", glyph: "bnb", ink: "#1a1a1a" },
   BASE:      { color: "#0052ff", glyph: "base" },
-  RH:        { color: "#00c805", text: "RH", ink: "#0b1a0c" },
-  ROBINHOOD: { color: "#00c805", text: "RH", ink: "#0b1a0c" },
-  HYPE:      { color: "#2dd4bf", text: "HL", ink: "#062b27" },
   ARB:       { color: "#12aaff", text: "ARB" },
+  OP:        { color: "#ff0420", text: "OP" },
+  POLY:      { color: "#8247e5", text: "POL" },
   AVAX:      { color: "#e84142", text: "AVX" },
-  ABS:       { color: "#00d977", text: "ABS", ink: "#04301b" },
+  BLAST:     { color: "#fcfc03", text: "BLT", ink: "#1f1f00" },
+  RH:        { color: "#00c805", text: "RH", ink: "#0b1a0c" },
   ARC:       { color: "#6366f1", text: "ARC" },
   STBL:      { color: "#f59e0b", text: "STB", ink: "#2b1a02" },
+  ABS:       { color: "#00d977", text: "ABS", ink: "#04301b" },
+  HYPE:      { color: "#2dd4bf", text: "HL", ink: "#062b27" },
+  LINEA:     { color: "#61dfff", text: "LIN", ink: "#062a33" },
+  SONIC:     { color: "#f5a524", text: "SON", ink: "#2b1a02" },
+  MONAD:     { color: "#836ef9", text: "MON" },
+  UNI:       { color: "#f50db4", text: "UNI" },
+  ZK:        { color: "#8c8dfc", text: "ZK", ink: "#14143a" },
+  SCROLL:    { color: "#ffdbb0", text: "SCR", ink: "#3b2a1a" },
+  MANTLE:    { color: "#65b3ae", text: "MNT", ink: "#062a27" },
+  BERA:      { color: "#f47226", text: "BER" },
+  SEI:       { color: "#9e1f19", text: "SEI" },
+  CRO:       { color: "#1199fa", text: "CRO" },
+  XLAYER:    { color: "#94a3b8", text: "XL", ink: "#0f172a" },
+  WORLD:     { color: "#e5e7eb", text: "WLD", ink: "#111827" },
+  INK:       { color: "#7132f5", text: "INK" },
+  PLASMA:    { color: "#00ff9d", text: "XPL", ink: "#003d26" },
+  GNOSIS:    { color: "#04795b", text: "GNO" },
+  CELO:      { color: "#fcff52", text: "CEL", ink: "#2a2b00" },
   TRON:      { color: "#ef0027", text: "TRX" },
 };
+// Bots don't agree on tags ([RH] vs [ROBINHOOD]) — aliases share a badge.
+// Mirrors the registry in hotgraph/chains.py, which is what the API and the
+// verifier go by.
+const CHAIN_ALIASES = {
+  SOLANA: "SOL", ETHEREUM: "ETH", MAINNET: "ETH", BNB: "BSC", BNBCHAIN: "BSC",
+  ARBITRUM: "ARB", OPTIMISM: "OP", MATIC: "POLY", POLYGON: "POLY", POL: "POLY",
+  AVALANCHE: "AVAX", ROBINHOOD: "RH", STABLE: "STBL", ABSTRACT: "ABS",
+  HYPEREVM: "HYPE", HL: "HYPE", HYPERLIQUID: "HYPE", MON: "MONAD", UNICHAIN: "UNI",
+  ZKSYNC: "ZK", ERA: "ZK", SCR: "SCROLL", MNT: "MANTLE", BERACHAIN: "BERA",
+  CRONOS: "CRO", OKX: "XLAYER", "X-LAYER": "XLAYER", WORLDCHAIN: "WORLD", WLD: "WORLD",
+  XPL: "PLASMA", GNO: "GNOSIS", XDAI: "GNOSIS", TRX: "TRON",
+};
+const canonTag = (tag) => {
+  const t = (tag || "").toUpperCase();
+  return CHAIN_ALIASES[t] || t;
+};
 const chainInfo = (d) => {
-  const tag = (d.chain_tag || "").toUpperCase();
+  const tag = canonTag(d.chain_tag);
   return CHAINS[tag] || { color: "#64748b", text: (tag || (d.chain === "solana" ? "SOL" : "EVM")).slice(0, 3) };
 };
 
@@ -196,6 +234,9 @@ setTimeout(() => {
 let sim = null;
 let currentData = { nodes: [], links: [] };
 let tickCount = 0;
+let arrangeMode = "free";   // 'free' | 'pack' | 'mcap' | 'newest' | 'oldest' | 'holders'
+let clearPanelsUntil = 0;   // while the layout settles after a panel opens, keep bubbles clear of it
+let simCtx = null;          // canvas geometry the current simulation was built for
 
 /* ---------- change flashing ----------
  * Anything new or changed on a live update pulses for FLASH_MS so the eye
@@ -265,7 +306,6 @@ const linkKey = (l) => `${endId(l.source)}|${endId(l.target)}`;
 }
 
 const controls = {
-  chain: document.getElementById("chain"),
   includeSold: document.getElementById("includeSold"),
   minMcap: document.getElementById("minMcap"),
   maxMcap: document.getElementById("maxMcap"),
@@ -487,6 +527,111 @@ function render(data, live = false) {
     (update) => update,
     (exit) => (live ? pulverise(exit) : exit.remove()));
 
+  decorateNodes(node);
+
+  applyFlash();
+
+  node
+    .on("mousemove", (e, d) => showTip(e, d))
+    .on("mouseleave", hideTip)
+    .on("click", (e, d) => {
+      e.stopPropagation();
+      if (d.kind === "token") {
+        selectToken(d, e.currentTarget);
+        focusOn(d);
+      } else {
+        openHolderModal(d);
+      }
+    });
+
+  // Aspect of the canvas area not covered by side panels, normalised so
+  // that aspect >= 1 means "wider than tall".
+  const availW = Math.max(200, width - visiblePanelWidth("feedPanel")
+    - (visiblePanelWidth("tokenPanel") || visiblePanelWidth("mergePanel")));
+  const aspectRaw = availW / Math.max(200, height);
+  const aspect = aspectRaw >= 1 ? aspectRaw : 1 / aspectRaw;
+  if (sim) sim.stop();
+  sim = d3
+    .forceSimulation(data.nodes)
+    .force(
+      "link",
+      d3
+        .forceLink(links)
+        .id((d) => d.id)
+        // Tight links so each holder hugs its token as a satellite rather
+        // than drifting into a neighbouring cluster.
+        .distance((l) => (l.target.r || 40) + (l.source.r || 12) + 6)
+        .strength(1)
+    )
+    .on("tick", () => {
+      link
+        .attr("x1", (d) => d.source.x)
+        .attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x)
+        .attr("y2", (d) => d.target.y);
+      node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+      updateNodeActions();
+
+      // Re-frame off the tick counter rather than a timer. Ticks track the
+      // layout's actual progress, so the view can never end up pinned to an
+      // early clump that the simulation then moves away from.
+      if (++tickCount % 20 === 0) {
+        if (Date.now() < clearPanelsUntil) clearOfPanels();
+        else fitToView();
+      }
+    })
+    // Settling is the only safe moment to frame: fitting earlier locks the
+    // viewport onto the initial clump, and forceCenter then drags every node
+    // out of view.
+    .on("end", () => {
+      if (Date.now() < clearPanelsUntil) clearOfPanels();
+      else fitToView();
+      keepPinned(pinScreen);
+    });
+
+  // The remaining forces depend on the arrangement mode, which the user can
+  // switch without a reload — see configureForces().
+  simCtx = { width, height, aspect, aspectRaw };
+  configureForces();
+
+  // A layout that starts from carried-over positions only needs a gentle
+  // shake to fit the newcomers in.
+  if (live && prev.size) sim.alpha(0.4);
+
+  tickCount = 0;
+
+  node.call(
+    d3
+      .drag()
+      .on("start", (e, d) => {
+        if (!e.active) sim.alphaTarget(0.25).restart();
+        d.fx = d.x;
+        d.fy = d.y;
+      })
+      .on("drag", (e, d) => {
+        d.fx = e.x;
+        d.fy = e.y;
+      })
+      .on("end", (e, d) => {
+        if (!e.active) sim.alphaTarget(0);
+        d.fx = null;
+        d.fy = null;
+      })
+  );
+
+  const holders = data.nodes.filter((n) => n.kind === "person");
+  const tokens = data.nodes.filter((n) => n.kind === "token");
+  const sold = holders.filter((n) => n.status === "SOLD").length;
+  document.getElementById("stat").innerHTML =
+    `<b>${tokens.length}</b> tokens<i>·</i><b>${holders.length}</b> positions<i>·</i><b>${sold}</b> sold`;
+
+  renderTokenList();
+}
+
+/* Everything that makes a bubble look like itself — size, chain tint or
+ * person colour, labels, chain badge. Shared by the graph and the token
+ * window so a token looks the same wherever it's drawn. */
+function decorateNodes(node) {
   node
     .select("circle")
     .attr("r", (d) => d.r)
@@ -569,106 +714,137 @@ function render(data, live = false) {
           .attr("dy", "0.36em");
       }
     });
-
-  applyFlash();
-
-  node
-    .on("mousemove", (e, d) => showTip(e, d))
-    .on("mouseleave", hideTip)
-    .on("click", (e, d) => {
-      e.stopPropagation();
-      if (d.kind === "token") selectToken(d, e.currentTarget);
-      focusOn(d);
-    });
-
-  // Aspect of the canvas area not covered by side panels, normalised so
-  // that aspect >= 1 means "wider than tall".
-  const availW = Math.max(200, width - visiblePanelWidth("feedPanel")
-    - (visiblePanelWidth("tokenPanel") || visiblePanelWidth("mergePanel")));
-  const aspectRaw = availW / Math.max(200, height);
-  const aspect = aspectRaw >= 1 ? aspectRaw : 1 / aspectRaw;
-  if (sim) sim.stop();
-  sim = d3
-    .forceSimulation(data.nodes)
-    .force(
-      "link",
-      d3
-        .forceLink(links)
-        .id((d) => d.id)
-        // Tight links so each holder hugs its token as a satellite rather
-        // than drifting into a neighbouring cluster.
-        .distance((l) => (l.target.r || 40) + (l.source.r || 12) + 6)
-        .strength(1)
-    )
-    // Spacing comes from collision, not repulsion: a strong many-body charge
-    // spread 150 tokens so far apart that fitting them all on screen made
-    // every bubble tiny. Tokens keep a mild push so clusters stay separable;
-    // people barely repel, so their link dominates and keeps them in orbit.
-    .force("charge", d3.forceManyBody().strength((d) => (d.kind === "token" ? -220 : -12)).distanceMax(600))
-    .force("collide", d3.forceCollide().radius((d) => d.r + (d.kind === "token" ? 8 : 3)).iterations(4))
-    // Without forceCenter the layout settles around the origin, i.e. the
-    // top-left corner, leaving the canvas looking empty.
-    .force("center", d3.forceCenter(width / 2, height / 2))
-    // Shape the blob like the visible canvas: a weaker pull along the long
-    // axis lets it spread that way, so "fit everything" fills the screen
-    // instead of leaving empty side margins around a square cloud.
-    .force("x", d3.forceX(width / 2).strength((d) => (d.kind === "token" ? 0.07 : 0.004) / (aspect * aspect * aspect)))
-    .force("y", d3.forceY(height / 2).strength((d) => (d.kind === "token" ? 0.07 : 0.004) * (aspect < 1 ? aspect * aspect : 1)))
-    .on("tick", () => {
-      link
-        .attr("x1", (d) => d.source.x)
-        .attr("y1", (d) => d.source.y)
-        .attr("x2", (d) => d.target.x)
-        .attr("y2", (d) => d.target.y);
-      node.attr("transform", (d) => `translate(${d.x},${d.y})`);
-      updateNodeActions();
-
-      // Re-frame off the tick counter rather than a timer. Ticks track the
-      // layout's actual progress, so the view can never end up pinned to an
-      // early clump that the simulation then moves away from.
-      if (++tickCount % 20 === 0) fitToView();
-    })
-    // Settling is the only safe moment to frame: fitting earlier locks the
-    // viewport onto the initial clump, and forceCenter then drags every node
-    // out of view.
-    .on("end", () => {
-      fitToView();
-      keepPinned(pinScreen);
-    });
-
-  // A layout that starts from carried-over positions only needs a gentle
-  // shake to fit the newcomers in.
-  if (live && prev.size) sim.alpha(0.4);
-
-  tickCount = 0;
-
-  node.call(
-    d3
-      .drag()
-      .on("start", (e, d) => {
-        if (!e.active) sim.alphaTarget(0.25).restart();
-        d.fx = d.x;
-        d.fy = d.y;
-      })
-      .on("drag", (e, d) => {
-        d.fx = e.x;
-        d.fy = e.y;
-      })
-      .on("end", (e, d) => {
-        if (!e.active) sim.alphaTarget(0);
-        d.fx = null;
-        d.fy = null;
-      })
-  );
-
-  const holders = data.nodes.filter((n) => n.kind === "person");
-  const tokens = data.nodes.filter((n) => n.kind === "token");
-  const sold = holders.filter((n) => n.status === "SOLD").length;
-  document.getElementById("stat").textContent =
-    `${tokens.length} tokens · ${holders.length} positions · ${sold} sold`;
-
-  renderTokenList();
 }
+
+/* ---------- arrangement ----------
+ * "free" is the plain force layout. Every other mode gives each token a
+ * target spot — packed as tightly as circles allow, or laid out in reading
+ * order (left→right, top→bottom) by market cap, last action or holder
+ * count — and the simulation pulls the cluster there, holders in tow. */
+
+const ARRANGE_ORDER = {
+  mcap: (a, b) => (b.value || 0) - (a.value || 0),
+  newest: (a, b) => (b.last_action || 0) - (a.last_action || 0),
+  oldest: (a, b) => (a.last_action || 9e15) - (b.last_action || 9e15),
+  holders: (a, b) => (b.n_holders - a.n_holders) || (b.n_positions - a.n_positions),
+};
+
+function configureForces() {
+  if (!sim || !simCtx) return;
+  const { width, height, aspect, aspectRaw } = simCtx;
+  sim.force("collide", d3.forceCollide().radius((d) => d.r + (d.kind === "token" ? 8 : 3)).iterations(4));
+
+  if (arrangeMode === "free") {
+    sim
+      // Spacing comes from collision, not repulsion: a strong many-body
+      // charge spread 150 tokens so far apart that fitting them all on
+      // screen made every bubble tiny. Tokens keep a mild push so clusters
+      // stay separable; people barely repel, so their link dominates and
+      // keeps them in orbit.
+      .force("charge", d3.forceManyBody().strength((d) => (d.kind === "token" ? -220 : -12)).distanceMax(600))
+      // Without forceCenter the layout settles around the origin, i.e. the
+      // top-left corner, leaving the canvas looking empty.
+      .force("center", d3.forceCenter(width / 2, height / 2))
+      // Shape the blob like the visible canvas: a weaker pull along the
+      // long axis lets it spread that way, so "fit everything" fills the
+      // screen instead of leaving empty side margins around a square cloud.
+      .force("x", d3.forceX(width / 2).strength((d) => (d.kind === "token" ? 0.07 : 0.004) / (aspect * aspect * aspect)))
+      .force("y", d3.forceY(height / 2).strength((d) => (d.kind === "token" ? 0.07 : 0.004) * (aspect < 1 ? aspect * aspect : 1)));
+    return;
+  }
+
+  arrangeTargets(width, height, aspectRaw);
+  sim
+    // No token repulsion: the targets already keep clusters apart, and a
+    // charge would only fight the pull toward them.
+    .force("charge", d3.forceManyBody().strength((d) => (d.kind === "token" ? 0 : -12)).distanceMax(600))
+    .force("center", null)
+    .force("x", d3.forceX((d) => d.tx).strength((d) => (d.kind === "token" ? 0.6 : 0.03)))
+    .force("y", d3.forceY((d) => d.ty).strength((d) => (d.kind === "token" ? 0.6 : 0.03)));
+}
+
+// Sets tx/ty on every node: tokens get their cluster's spot, holders their
+// token's, so a whole cluster travels together.
+function arrangeTargets(width, height, aspectRaw) {
+  const byToken = new Map();
+  for (const l of sim.force("link").links()) {   // endpoints are node objects here
+    const t = l.target.kind === "token" ? l.target : l.source;
+    const p = t === l.target ? l.source : l.target;
+    if (!byToken.has(t.id)) byToken.set(t.id, []);
+    byToken.get(t.id).push(p);
+  }
+  // A cluster is the token plus the ring of holders orbiting it. A token
+  // with one or two holders doesn't use its whole ring, so its footprint is
+  // trimmed — any real overlap is sorted out by the collision force.
+  const clusters = currentData.nodes
+    .filter((n) => n.kind === "token")
+    .map((t) => {
+      const hs = byToken.get(t.id) || [];
+      const hmax = d3.max(hs, (p) => p.r) || 0;
+      const ring = hmax ? hmax + 6 + hmax * Math.min(1, hs.length / 4) : 0;
+      return { t, r: t.r + ring + 8 };
+    });
+  if (!clusters.length) return;
+
+  if (arrangeMode === "pack") {
+    clusters.sort((a, b) => b.r - a.r); // biggest first packs tightest
+    d3.packSiblings(clusters);          // sets x, y on each cluster
+  } else {
+    clusters.sort((a, b) => ARRANGE_ORDER[arrangeMode](a.t, b.t));
+    flowRows(clusters, aspectRaw);
+  }
+
+  // Centre the block on the canvas so it lands where the free layout lives.
+  const cx = (d3.min(clusters, (c) => c.x - c.r) + d3.max(clusters, (c) => c.x + c.r)) / 2;
+  const cy = (d3.min(clusters, (c) => c.y - c.r) + d3.max(clusters, (c) => c.y + c.r)) / 2;
+  for (const c of clusters) {
+    c.t.tx = c.x - cx + width / 2;
+    c.t.ty = c.y - cy + height / 2;
+    for (const p of byToken.get(c.t.id) || []) { p.tx = c.t.tx; p.ty = c.t.ty; }
+  }
+}
+
+// Reading-order rows, wrapped so the whole block roughly matches the shape
+// of the visible canvas rather than one endless line.
+function flowRows(clusters, aspect) {
+  const area = d3.sum(clusters, (c) => 4 * c.r * c.r);
+  const targetW = Math.max(d3.max(clusters, (c) => 2 * c.r), Math.sqrt(area * Math.max(0.3, aspect)));
+  const gap = 6;
+  let x = 0;
+  let y = 0;
+  let row = [];
+  const closeRow = () => {
+    const h = d3.max(row, (c) => 2 * c.r) || 0;
+    for (const c of row) c.y = y + h / 2;
+    y += h + gap;
+    x = 0;
+    row = [];
+  };
+  for (const c of clusters) {
+    if (row.length && x + 2 * c.r > targetW) closeRow();
+    c.x = x + c.r;
+    x += 2 * c.r + gap;
+    row.push(c);
+  }
+  if (row.length) closeRow();
+}
+
+const arrangeEl = document.getElementById("arrange");
+function syncArrange() {
+  arrangeEl.querySelectorAll("button").forEach((b) =>
+    b.classList.toggle("active", b.dataset.mode === arrangeMode));
+}
+arrangeEl.querySelectorAll("button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    // Clicking the active mode again releases the bubbles to the free layout.
+    arrangeMode = arrangeMode === btn.dataset.mode ? "free" : btn.dataset.mode;
+    syncArrange();
+    if (!sim) return;
+    configureForces();
+    userMovedView = false; // a new arrangement deserves a fresh framing
+    sim.alpha(1).restart();
+  });
+});
 
 function showEmpty(data) {
   const total = (data.stats && data.stats.raw_messages) || 0;
@@ -767,6 +943,48 @@ function visiblePanelWidth(id) {
   return el && !el.hidden ? el.offsetWidth : 0;
 }
 
+/* A side panel opening must never hide bubbles behind it. If the user
+ * hasn't taken the view, re-frame as usual; otherwise keep their zoom and
+ * push the graph just far enough toward the uncovered area's centre — and
+ * only when it can't fit at that zoom, zoom out until it does. */
+function clearOfPanels() {
+  if (!currentData.nodes.length) return;
+  if (!userMovedView) return fitToView(true);
+  if (!currentData.nodes.every((n) => Number.isFinite(n.x) && Number.isFinite(n.y))) return;
+
+  const t = d3.zoomTransform(svg.node());
+  const sx0 = t.applyX(d3.min(currentData.nodes, (n) => n.x - n.r));
+  const sx1 = t.applyX(d3.max(currentData.nodes, (n) => n.x + n.r));
+  const sy0 = t.applyY(d3.min(currentData.nodes, (n) => n.y - n.r));
+  const sy1 = t.applyY(d3.max(currentData.nodes, (n) => n.y + n.r));
+  if (![sx0, sx1, sy0, sy1].every(Number.isFinite)) return;
+
+  const { width, height } = svg.node().getBoundingClientRect();
+  const pad = 28;
+  const x0 = visiblePanelWidth("feedPanel") + pad;
+  const x1 = width - (visiblePanelWidth("tokenPanel") || visiblePanelWidth("mergePanel")) - pad;
+  const y0 = pad;
+  const y1 = height - pad;
+
+  // Too big for what's left of the canvas at this zoom: zoom out to fit.
+  if (sx1 - sx0 > x1 - x0 || sy1 - sy0 > y1 - y0) {
+    userMovedView = false;
+    fitToView(true);
+    userMovedView = true; // it's still their view — live updates shouldn't re-frame it
+    return;
+  }
+
+  // Otherwise the smallest pan that brings every bubble into the clear.
+  let dx = 0;
+  let dy = 0;
+  if (sx0 < x0) dx = x0 - sx0;
+  else if (sx1 > x1) dx = x1 - sx1;
+  if (sy0 < y0) dy = y0 - sy0;
+  else if (sy1 > y1) dy = y1 - sy1;
+  if (Math.hypot(dx, dy) < 1) return;
+  svg.transition().duration(450).call(zoom.transform, t.translate(dx / t.k, dy / t.k));
+}
+
 function focusOn(d) {
   userMovedView = true;
   const { width, height } = svg.node().getBoundingClientRect();
@@ -795,7 +1013,7 @@ async function load(refit = true, live = false) {
     sort: controls.sortBy.value,
     since_hours: controls.window.value,
   });
-  if (controls.chain.value) p.set("chain", controls.chain.value);
+  if (selectedChains.size) p.set("chain", [...selectedChains].join(","));
   if (selectedUsers.size) p.set("persons", [...selectedUsers].join(","));
 
   try {
@@ -861,8 +1079,10 @@ load();
 
 userBtn.addEventListener("click", (e) => {
   e.stopPropagation();
+  chainMenu.hidden = true;
   userMenu.hidden = !userMenu.hidden;
   if (!userMenu.hidden) {
+    raise(userMenu);
     // The header clips overflow, so the menu is a fixed element aligned to
     // the button — clamped so it never runs off the right edge.
     const r = userBtn.getBoundingClientRect();
@@ -885,6 +1105,101 @@ userSearch.addEventListener("input", loadUsers);
 // Clicks inside the menu must not bubble to the window handler that closes it.
 userMenu.addEventListener("click", (e) => e.stopPropagation());
 window.addEventListener("click", () => { userMenu.hidden = true; });
+
+/* ---------- chain filter ----------
+ * Multi-select over every chain the registry (hotgraph/chains.py) knows;
+ * the graph, feed counts and activity strip all follow it. Empty = all. */
+
+const selectedChains = new Set();
+const chainBtn = document.getElementById("chainFilterBtn");
+const chainMenu = document.getElementById("chainFilterMenu");
+const chainListEl = document.getElementById("chainList");
+const chainSearch = document.getElementById("chainSearch");
+let chainCatalog = []; // /api/chains: [{tag, name, family, n_tokens, n_live}]
+
+function syncChainBtn() {
+  const n = selectedChains.size;
+  chainBtn.textContent = !n ? "all ▾" : n <= 2 ? `${[...selectedChains].join(" + ")} ▾` : `${n} chains ▾`;
+}
+
+function renderChainMenu() {
+  const q = chainSearch.value.trim().toLowerCase();
+  chainListEl.innerHTML = "";
+  // Chains with live tokens first, busiest on top; ties keep registry order.
+  const rows = [...chainCatalog].sort((a, b) => (b.n_live - a.n_live) || (b.n_tokens - a.n_tokens));
+  for (const c of rows) {
+    if (q && !c.name.toLowerCase().includes(q) && !c.tag.toLowerCase().includes(q)) continue;
+    const row = document.createElement("label");
+    row.className = `user-row${c.n_tokens ? "" : " empty"}`;
+    row.title = `${c.name} [${c.tag}] · ${c.family}`;
+
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = selectedChains.has(c.tag);
+    cb.addEventListener("change", () => {
+      if (cb.checked) selectedChains.add(c.tag);
+      else selectedChains.delete(c.tag);
+      onChainChange();
+    });
+
+    const dot = document.createElement("span");
+    dot.className = "chain-dot";
+    dot.style.background = (CHAINS[c.tag] || {}).color || "#64748b";
+
+    const name = document.createElement("span");
+    name.className = "user-name";
+    name.textContent = c.name;
+
+    const meta = document.createElement("span");
+    meta.className = "user-meta";
+    meta.textContent = c.n_tokens ? `${c.n_live} live · ${c.n_tokens}` : "—";
+
+    row.append(cb, dot, name, meta);
+    chainListEl.append(row);
+  }
+  if (!chainListEl.children.length) {
+    chainListEl.innerHTML = `<div class="panel-hint">no matches</div>`;
+  }
+}
+
+async function loadChains() {
+  try {
+    const res = await fetch("/api/chains");
+    chainCatalog = (await res.json()).chains;
+  } catch (_) { /* keep the last catalogue */ }
+  renderChainMenu();
+}
+
+function onChainChange() {
+  syncChainBtn();
+  closeActivityPop();
+  load();
+  loadActivity();
+}
+
+chainBtn.addEventListener("click", (e) => {
+  e.stopPropagation();
+  userMenu.hidden = true;
+  chainMenu.hidden = !chainMenu.hidden;
+  if (!chainMenu.hidden) {
+    raise(chainMenu);
+    const r = chainBtn.getBoundingClientRect();
+    chainMenu.style.left = `${Math.max(8, Math.min(r.left, window.innerWidth - 270))}px`;
+    chainSearch.value = "";
+    loadChains();
+    chainSearch.focus();
+  }
+});
+
+document.getElementById("chainClear").addEventListener("click", () => {
+  selectedChains.clear();
+  renderChainMenu();
+  onChainChange();
+});
+
+chainSearch.addEventListener("input", renderChainMenu);
+chainMenu.addEventListener("click", (e) => e.stopPropagation());
+window.addEventListener("click", () => { chainMenu.hidden = true; });
 
 /* ---------- token list panel ----------
  * Built from currentData, so it always mirrors exactly what the graph shows —
@@ -937,34 +1252,48 @@ function renderTokenList() {
 
 // Fetch fresh market caps for every token the drawer currently lists (which
 // mirrors the graph). Retries live server-side, in hotgraph/mcap.py.
+// Two callers: the drawer button (progress bar + toast) and a quiet timer
+// below that keeps the numbers current on its own every few minutes.
 const mcapBtn = document.getElementById("mcapRefresh");
-mcapBtn.addEventListener("click", async () => {
+const MCAP_BTN_LABEL = "💲 refresh market caps";
+let mcapBusy = false;
+let mcapLastRun = Date.now(); // page load counts — the graph arrives fresh
+
+async function refreshMcaps({ silent = false } = {}) {
+  if (mcapBusy) return false;
   const tokens = currentData.nodes
     .filter((n) => n.kind === "token" && n.resolved)
     .map((t) => ({ chain: t.chain, token_key: t.token_key }));
   if (!tokens.length) {
-    toast("⚠️ No address-keyed tokens shown — nothing to refresh.");
-    return;
+    if (!silent) toast("⚠️ No address-keyed tokens shown — nothing to refresh.");
+    return false;
   }
+  mcapBusy = true;
   mcapBtn.disabled = true;
-  mcapBtn.textContent = `fetching ${tokens.length} market caps…`;
+  mcapBtn.textContent = silent
+    ? "💲 refreshing market caps…"
+    : `fetching ${tokens.length} market caps…`;
 
   // Same top bar the rebuild uses — here the total is known, so it's a real
-  // percentage from the start.
-  rebuildProgress.hidden = false;
-  rebuildFill.classList.remove("indeterminate");
-  rebuildFill.style.width = "0%";
-  rebuildLabel.textContent = `fetching market caps — 0/${tokens.length}`;
-  const poll = setInterval(async () => {
-    try {
-      const st = await (await fetch("/api/mcaps/status")).json();
-      if (st.active && st.total) {
-        rebuildFill.style.width = `${Math.round((st.done / st.total) * 100)}%`;
-        rebuildLabel.textContent =
-          `fetching market caps — ${st.done}/${st.total}`;
-      }
-    } catch (_) { /* transient */ }
-  }, 400);
+  // percentage from the start. The automatic run skips it: a bar sliding
+  // across the top every few minutes would be noise.
+  let poll = null;
+  if (!silent) {
+    rebuildProgress.hidden = false;
+    rebuildFill.classList.remove("indeterminate");
+    rebuildFill.style.width = "0%";
+    rebuildLabel.textContent = `fetching market caps — 0/${tokens.length}`;
+    poll = setInterval(async () => {
+      try {
+        const st = await (await fetch("/api/mcaps/status")).json();
+        if (st.active && st.total) {
+          rebuildFill.style.width = `${Math.round((st.done / st.total) * 100)}%`;
+          rebuildLabel.textContent =
+            `fetching market caps — ${st.done}/${st.total}`;
+        }
+      } catch (_) { /* transient */ }
+    }, 400);
+  }
 
   try {
     const res = await fetch("/api/mcaps", {
@@ -974,22 +1303,49 @@ mcapBtn.addEventListener("click", async () => {
     });
     const out = await res.json();
     if (!res.ok) throw new Error(out.detail || res.status);
-    const extras = [
-      out.unknown ? `${out.unknown} unknown to DexScreener` : null,
-      out.failed ? `${out.failed} failed after retries` : null,
-    ].filter(Boolean).join(", ");
-    toast(`✅ Market caps updated for ${out.updated}/${out.requested} tokens` +
-      (extras ? ` (${extras})` : ""), 8000, "ok");
+    if (!silent) {
+      const extras = [
+        out.unknown ? `${out.unknown} unknown to DexScreener` : null,
+        out.failed ? `${out.failed} failed after retries` : null,
+      ].filter(Boolean).join(", ");
+      toast(`✅ Market caps updated for ${out.updated}/${out.requested} tokens` +
+        (extras ? ` (${extras})` : ""), 8000, "ok");
+    }
     await load(false); // keep the user's pan/zoom; bubbles resize in place
+    return true;
   } catch (err) {
-    toast(`⚠️ Market cap refresh failed: ${err.message}`);
+    if (silent) console.warn("automatic market-cap refresh failed:", err.message);
+    else toast(`⚠️ Market cap refresh failed: ${err.message}`);
+    return false;
   } finally {
-    clearInterval(poll);
-    rebuildProgress.hidden = true;
+    // Counted whether it worked or not, so a flaky upstream (or a 409 from
+    // another tab's refresh) is retried on the normal cadence, not every tick.
+    mcapLastRun = Date.now();
+    if (poll) clearInterval(poll);
+    if (!silent) rebuildProgress.hidden = true;
+    mcapBusy = false;
     mcapBtn.disabled = false;
-    mcapBtn.textContent = "💲 refresh market caps";
+    mcapBtn.textContent = MCAP_BTN_LABEL;
   }
-});
+}
+
+mcapBtn.addEventListener("click", () => refreshMcaps());
+
+// Automatic refresh: every few minutes, quietly, and only while the tab is
+// visible — a background tab would just spend DexScreener's rate budget for
+// nobody. A tab that comes back overdue refreshes right away. The interval
+// is checked every 30s rather than scheduled outright so a manual refresh
+// (or a failure) simply pushes the next automatic one back by a full period.
+const MCAP_AUTO_MS = 3 * 60 * 1000;
+
+function autoRefreshMcaps() {
+  if (document.hidden || mcapBusy) return;
+  if (Date.now() - mcapLastRun < MCAP_AUTO_MS) return;
+  refreshMcaps({ silent: true });
+}
+
+setInterval(autoRefreshMcaps, 30 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) autoRefreshMcaps(); });
 
 // Progress bar for a running holder verification (single token or the whole
 // drawer). Tokens are the coarse unit; wallets within the current token fill
@@ -1086,7 +1442,14 @@ function syncMapButtons() {
   listToggleBtn.style.right = `${offset}px`;
 
   const fp = document.getElementById("feedPanel");
-  feedToggleBtn.style.left = `${12 + (fp && !fp.hidden ? fp.offsetWidth : 0)}px`;
+  const feedLeft = 12 + (fp && !fp.hidden ? fp.offsetWidth : 0);
+  feedToggleBtn.style.left = `${feedLeft}px`;
+  document.getElementById("caSearch").style.left = `${feedLeft + feedToggleBtn.offsetWidth + 8}px`;
+
+  // Now, and again on the next few layout ticks — a simulation still
+  // settling would otherwise push bubbles back under the panel.
+  clearOfPanels();
+  clearPanelsUntil = Date.now() + 4000;
 }
 
 resetZoomBtn.addEventListener("click", () => {
@@ -1226,6 +1589,182 @@ mergeBtn.addEventListener("click", async () => {
 mergeName.addEventListener("input", updateMergeBtn);
 traderSearch.addEventListener("input", () => loadTraders());
 
+/* ---------- sign out of Telegram ----------
+ * Logs the HotGraph device out (revoked server-side) and deletes its session
+ * file. The listener's disconnect stops the whole process, so the page goes
+ * dark on purpose; start.py then asks for a fresh login. The DB is kept. */
+document.getElementById("signOut").addEventListener("click", async (e) => {
+  const btn = e.currentTarget;
+  if (!confirm(
+    "Sign out of Telegram?\n\nHotGraph will stop and delete its session file. " +
+    "Your alerts and positions are kept. Run start again to log back in.")) return;
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/logout", { method: "POST" });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.detail || res.status);
+    document.querySelectorAll(".empty").forEach((el) => el.remove());
+    svg.node().insertAdjacentHTML("afterend",
+      `<div class="empty">Signed out — HotGraph has stopped.<br>Run <code>start</code> again to log in.</div>`);
+    toast("✅ Signed out of Telegram — HotGraph is stopping.", 15000, "ok");
+  } catch (err) {
+    btn.disabled = false;
+    toast(`⚠️ Sign out failed: ${escapeHtml(err.message)}`);
+  }
+});
+
+/* ---------- suspected new wallets ----------
+ * A tracked person sending tokens to a wallet with nothing coming back is a
+ * move, and the recipient is usually theirs too. Untracked recipients are
+ * listed here (server derives them from the transfer events); one click
+ * merges the wallet into the person, or dismisses it as not theirs. */
+
+const walletsModal = document.getElementById("walletsModal");
+const walletsBtn = document.getElementById("walletsBtn");
+const walletsCount = document.getElementById("walletsCount");
+let walletsData = new Map(); // wallet -> suggestion group
+
+function updateWalletsBadge(n) {
+  const count = n || 0;
+  walletsBtn.classList.toggle("pulse", count > 0);
+  walletsCount.hidden = !count;
+  walletsCount.textContent = count;
+  walletsBtn.title = count
+    ? `${count} new suspected wallet${count === 1 ? "" : "s"} — tracked people sent tokens to wallets nobody tracks yet`
+    : "suspected new wallets — tracked people sent tokens to these (nothing received back), but nobody tracks them yet";
+}
+
+async function loadWalletSuggestions({ markSeen = false } = {}) {
+  const body = document.getElementById("wmBody");
+  try {
+    const res = await fetch("/api/wallet_suggestions");
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || res.status);
+    renderWalletSuggestions(data);
+    if (markSeen && data.new) {
+      await fetch("/api/wallet_suggestions/seen", { method: "POST" });
+      updateWalletsBadge(0);
+    }
+  } catch (err) {
+    body.innerHTML = `<div class="panel-hint">Couldn't load suggestions: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function openWalletsModal() {
+  walletsModal.hidden = false;
+  raise(walletsModal);
+  hideTip();
+  document.getElementById("wmBody").innerHTML = `<div class="panel-hint">loading…</div>`;
+  loadWalletSuggestions({ markSeen: true });
+}
+
+function closeWalletsModal() {
+  walletsModal.hidden = true;
+}
+
+function renderWalletSuggestions(data) {
+  const body = document.getElementById("wmBody");
+  const list = data.suggestions;
+  walletsData = new Map(list.map((g) => [g.wallet, g]));
+  document.getElementById("wmSub").textContent =
+    `${list.length} wallet${list.length === 1 ? "" : "s"}${data.new ? ` · ${data.new} new` : ""}`;
+  if (!list.length) {
+    body.innerHTML = `<div class="panel-hint">Nothing yet. When someone you track sends tokens to a wallet
+      you don't track — and gets nothing back — that wallet shows up here as probably theirs.</div>`;
+    return;
+  }
+  body.innerHTML = list.map((g) => {
+    const s = g.senders[0];
+    const names = g.senders.map((x) => escapeHtml(x.person)).join(", ");
+    const isEvm = /^0x[a-fA-F0-9]{40}$/.test(g.wallet);
+    const tag = g.chain_tags[0] || (g.chain === "solana" ? "SOL" : "");
+    const ex = EXPLORERS[tag];
+    const badges = g.chain_tags.map((t) => {
+      const info = CHAINS[t] || { color: "#64748b" };
+      return `<span class="badge" style="background:${info.color}22;color:${info.color}">${escapeHtml(t)}</span>`;
+    }).join("");
+    const toks = g.tokens.slice(0, 8).map((t) =>
+      `<span class="tok" title="${agoSpan(t.ts)}${t.mcap_usd != null ? ` · MC ${fmtUsd(t.mcap_usd)}` : ""}">${escapeHtml(displaySymbol(t.symbol))}${t.pct != null ? ` ${fmtPct(t.pct)}` : ""}</span>`
+    ).join("") + (g.tokens.length > 8 ? `<span class="tok">+${g.tokens.length - 8} more</span>` : "");
+    return `<div class="sug-row${g.new ? " new" : ""}" data-wallet="${escapeHtml(g.wallet)}">
+      <div class="head">
+        <span class="dot" style="background:${s.color || personColor(s.person)}"></span>
+        <span class="who">${names}</span><span class="arrow">→</span>
+        <span class="addr" title="${escapeHtml(g.wallet)}">${displaySymbol(g.wallet)}</span>${badges}
+        <span class="when">${g.n} move${g.n === 1 ? "" : "s"} · ${agoSpan(g.last_ts)}</span>
+      </div>
+      <div class="toks">${toks}</div>
+      <div class="actions">
+        <button class="btn small primary" data-merge title="merge this wallet into ${escapeHtml(s.person)} — positions rebuild and both wallets share one bubble">👥 it's ${escapeHtml(s.person)} — merge</button>
+        ${ex ? `<a class="btn small" href="${ex[1]}${escapeHtml(g.wallet)}" target="_blank" rel="noopener">${ex[0]} ↗</a>` : ""}
+        ${isEvm ? `<a class="btn small" href="https://debank.com/profile/${escapeHtml(g.wallet)}" target="_blank" rel="noopener">DeBank ↗</a>` : ""}
+        <button class="btn small" data-copy>⧉ copy</button>
+        <button class="btn small" data-dismiss title="not their wallet (exchange, friend…) — hide this suggestion for good">✕ not theirs</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+
+document.getElementById("wmBody").addEventListener("click", async (e) => {
+  const row = e.target.closest(".sug-row");
+  if (!row) return;
+  const g = walletsData.get(row.dataset.wallet);
+  if (!g) return;
+  const btn = e.target.closest("button, a");
+  if (!btn || btn.tagName === "A") return;
+
+  if (btn.hasAttribute("data-copy")) {
+    try {
+      await navigator.clipboard.writeText(g.wallet);
+      btn.textContent = "✓ copied";
+      setTimeout(() => { btn.textContent = "⧉ copy"; }, 1500);
+    } catch (_) { toast("Couldn't access the clipboard.", 4000); }
+    return;
+  }
+
+  if (btn.hasAttribute("data-dismiss")) {
+    btn.disabled = true;
+    try {
+      const res = await fetch("/api/wallet_suggestions/dismiss", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ trader_key: g.wallet }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail || res.status);
+      loadWalletSuggestions();
+    } catch (err) {
+      btn.disabled = false;
+      toast(`⚠️ Couldn't dismiss: ${escapeHtml(err.message)}`);
+    }
+    return;
+  }
+
+  if (btn.hasAttribute("data-merge")) {
+    const s = g.senders[0];
+    btn.disabled = true;
+    btn.textContent = "merging…";
+    try {
+      const res = await fetch("/api/merge", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ person: s.person, keys: [s.key, g.wallet], color: s.color || null }),
+      });
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.detail || res.status);
+      toast(`✅ <strong>${displaySymbol(g.wallet)}</strong> is now part of <strong>${escapeHtml(s.person)}</strong> — positions rebuilt.`, 8000, "ok");
+      loadWalletSuggestions();
+      await load(false);
+      if (!panel.hidden) { loadTraders(); loadGroups(); }
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = `👥 it's ${s.person} — merge`;
+      toast(`⚠️ Merge failed: ${escapeHtml(err.message)}`);
+    }
+  }
+});
+
+walletsBtn.addEventListener("click", openWalletsModal);
+document.getElementById("wmClose").addEventListener("click", closeWalletsModal);
+walletsModal.addEventListener("click", (e) => { if (e.target === walletsModal) closeWalletsModal(); });
+
 document.getElementById("mergeToggle").addEventListener("click", () => {
   panel.hidden = !panel.hidden;
   if (!panel.hidden) {
@@ -1279,9 +1818,11 @@ bindMoneyBox(minBox, (v) => setMcapRange(v, mcapMax && mcapMax < v ? v : mcapMax
 bindMoneyBox(maxBox, (v) => setMcapRange(v && mcapMin > v ? v : mcapMin, v));
 document.getElementById("reload").addEventListener("click", load);
 window.addEventListener("resize", () => {
-  if (!sim) return;
+  if (!sim || !simCtx) return;
   const { width, height } = svg.node().getBoundingClientRect();
-  sim.force("center", d3.forceCenter(width / 2, height / 2)).alpha(0.3).restart();
+  simCtx = { ...simCtx, width, height };
+  configureForces();
+  sim.alpha(0.3).restart();
 });
 
 /* ---------- alert sound ----------
@@ -1358,6 +1899,566 @@ soundBtn.addEventListener("click", () => {
   }
 });
 
+/* ---------- find by contract address ----------
+ * A token the current filters draw is focused in place; anything else —
+ * filtered out, outside the top-N, hidden, or long since exited — opens in
+ * its own window with every holder attached and everything known about it. */
+
+const caInput = document.getElementById("caSearch");
+const normKey = (s) => {
+  const v = s.trim();
+  return /^0x[a-fA-F0-9]{40}$/.test(v) ? v.toLowerCase() : v;
+};
+
+function findOnGraph(q) {
+  const ql = normKey(q).toLowerCase();
+  return currentData.nodes.find((n) => n.kind === "token" &&
+    (String(n.token_key).toLowerCase() === ql || (n.symbol || "").toLowerCase() === ql));
+}
+
+async function searchToken(q) {
+  if (!q.trim()) return;
+  const hit = findOnGraph(q);
+  if (hit) {
+    closeTokenModal();
+    const gEl = gNodes.selectAll("g.node").filter((d) => d.id === hit.id).node();
+    if (gEl) selectToken(hit, gEl);
+    focusOn(hit);
+    return;
+  }
+  caInput.disabled = true;
+  try {
+    const res = await fetch(`/api/token?q=${encodeURIComponent(normKey(q))}`);
+    if (res.status === 404) {
+      toast(`No token seen for <code>${escapeHtml(q.trim())}</code> — nobody tracked has traded it.`, 6000);
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    openTokenModal(await res.json());
+  } catch (err) {
+    toast(`Search failed: ${escapeHtml(err.message)}`, 6000);
+  } finally {
+    caInput.disabled = false;
+  }
+}
+
+const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+caInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); searchToken(caInput.value); }
+  if (e.key === "Escape") caInput.blur();
+});
+
+/* ---------- token window ----------
+ * The same bubbles as the main graph — token in the middle, holders in
+ * orbit, same styling and tooltips — drawn for one token in a modal, with
+ * the side column spelling out what the bubbles only hint at. */
+
+const tokenModal = document.getElementById("tokenModal");
+const tmGraph = d3.select("#tmGraph");
+const tmRoot = tmGraph.append("g");
+const tmLinks = tmRoot.append("g").attr("class", "links");
+const tmNodes = tmRoot.append("g").attr("class", "nodes");
+let tmSim = null;
+let tmData = null; // what the open window shows; null when closed
+const tmVerify = document.getElementById("tmVerify");
+const tmMcap = document.getElementById("tmMcap");
+
+function openTokenModal(data) {
+  tmData = data;
+  if (tokenModal.hidden) {
+    tokenModal.hidden = false;
+    raise(tokenModal);
+  }
+  renderTokenModal(data);
+}
+
+function renderTokenModal(data) {
+  const t = data.token;
+  document.getElementById("tmTitle").textContent = displaySymbol(t.symbol);
+  document.getElementById("tmSub").textContent =
+    `${t.name && t.name !== t.symbol ? `${t.name} · ` : ""}${t.n_holders} holding · ${t.n_positions} positions`;
+  // Ticker-only tokens have no contract address: nothing to ask the chain
+  // or DexScreener about.
+  tmVerify.hidden = tmMcap.hidden = !t.resolved;
+  renderTokenSide(data);
+  renderMiniGraph(data);
+}
+
+// Re-fetch the token the window shows (after a verify / mcap refresh) and
+// redraw it in place — unless the user has closed it or opened another.
+async function reloadTokenModal(t) {
+  if (!tmData || tmData.token.id !== t.id) return;
+  try {
+    const res = await fetch(`/api/token?q=${encodeURIComponent(String(t.token_key))}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (tmData && tmData.token.id === t.id) {
+      tmData = data;
+      renderTokenModal(data);
+    }
+  } catch (_) { /* the window keeps its old numbers */ }
+}
+
+function closeTokenModal() {
+  if (tokenModal.hidden) return;
+  tokenModal.hidden = true;
+  tmData = null;
+  if (tmSim) tmSim.stop();
+  hideTip();
+}
+
+// Verify holders: every listed wallet's real share, straight from the chain.
+tmVerify.addEventListener("click", async () => {
+  if (!tmData) return;
+  const t = tmData.token;
+  tmVerify.disabled = true;
+  tmVerify.textContent = "verifying…";
+  const stopProgress = trackVerifyProgress(`verifying ${displaySymbol(t.symbol)}`, 1);
+  try {
+    const res = await fetch("/api/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chain: t.chain, token_key: t.token_key }),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.detail || res.status);
+    const lines = out.results
+      .map((r) => r.error
+        ? `${displaySymbol(r.trader_key)}: ${r.error}`
+        : `${displaySymbol(r.trader_key)}: ${fmtPct(r.pct)} on-chain`)
+      .join("<br>");
+    toast(
+      `✅ <strong>${displaySymbol(out.symbol || t.symbol)}</strong> checked on-chain ` +
+      `(${out.verified}/${out.checked} wallets)<br>${lines}`,
+      12000, "ok");
+    await Promise.all([reloadTokenModal(t), load(false)]);
+  } catch (err) {
+    toast(`⚠️ Verify <strong>${displaySymbol(t.symbol)}</strong> failed: ${escapeHtml(err.message)}`);
+  } finally {
+    stopProgress();
+    tmVerify.disabled = false;
+    tmVerify.textContent = "✓ verify holders";
+  }
+});
+
+// Verify market cap: one DexScreener lookup for this token, freshest wins.
+tmMcap.addEventListener("click", async () => {
+  if (!tmData) return;
+  if (mcapBusy) { toast("⚠️ A market-cap refresh is already running — try again in a moment."); return; }
+  const t = tmData.token;
+  mcapBusy = true; // keeps the automatic refresh from colliding (409)
+  tmMcap.disabled = true;
+  tmMcap.textContent = "fetching…";
+  rebuildProgress.hidden = false;
+  rebuildFill.classList.add("indeterminate");
+  rebuildFill.style.width = "0%";
+  rebuildLabel.textContent = `fetching market cap — ${displaySymbol(t.symbol)}`;
+  try {
+    const res = await fetch("/api/mcaps", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tokens: [{ chain: t.chain, token_key: t.token_key }] }),
+    });
+    const out = await res.json();
+    if (!res.ok) throw new Error(out.detail || res.status);
+    if (!out.updated) {
+      toast(out.failed
+        ? `⚠️ DexScreener didn't answer for <strong>${displaySymbol(t.symbol)}</strong> — try again shortly.`
+        : `⚠️ DexScreener doesn't know <strong>${displaySymbol(t.symbol)}</strong> — market cap unchanged.`);
+      return;
+    }
+    await Promise.all([reloadTokenModal(t), load(false)]);
+    const fresh = tmData && tmData.token.id === t.id ? tmData.token : t;
+    toast(`✅ <strong>${displaySymbol(t.symbol)}</strong> market cap now ${fmtUsd(fresh.mcap_usd)}` +
+      (fresh.fdv_usd != null ? ` · fdv ${fmtUsd(fresh.fdv_usd)}` : ""), 8000, "ok");
+  } catch (err) {
+    toast(`⚠️ Market cap check failed: ${escapeHtml(err.message)}`);
+  } finally {
+    mcapLastRun = Date.now();
+    rebuildFill.classList.remove("indeterminate");
+    rebuildProgress.hidden = true;
+    mcapBusy = false;
+    tmMcap.disabled = false;
+    tmMcap.textContent = "💲 verify market cap";
+  }
+});
+
+document.getElementById("tmClose").addEventListener("click", closeTokenModal);
+tokenModal.addEventListener("click", (e) => { if (e.target === tokenModal) closeTokenModal(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!holderModal.hidden) closeHolderModal();
+  else if (!walletsModal.hidden) closeWalletsModal();
+  else closeTokenModal();
+});
+
+function renderMiniGraph(data) {
+  const nodes = data.nodes.map((n) => ({ ...n }));
+  const links = data.links.map((l) => ({ ...l }));
+  const radius = radiusScales(nodes);
+  nodes.forEach((n) => {
+    n.r = radius(n);
+    if (n.kind === "person" && !n.color) n.color = personColor(n.person);
+  });
+  // One big token bubble in a small window: cap the token so its ring of
+  // holders still fits around it.
+  const token = nodes.find((n) => n.kind === "token");
+  if (token) token.r = Math.min(token.r, 96);
+
+  const { width, height } = tmGraph.node().getBoundingClientRect();
+
+  const link = tmLinks.selectAll("line").data(links, linkKey).join("line")
+    .attr("class", (d) => `link ${d.status === "SOLD" ? "sold" : ""}`);
+
+  const node = tmNodes.selectAll("g.node").data(nodes, (d) => d.id).join((enter) => {
+    const g = enter.append("g").attr("class", "node");
+    g.append("circle");
+    g.append("text").attr("class", "label");
+    g.append("text").attr("class", "label sub");
+    g.append("text").attr("class", "label sub entry");
+    const badge = g.filter((d) => d.kind === "token").append("g").attr("class", "chain");
+    badge.append("circle");
+    badge.append("use");
+    badge.append("text");
+    return g;
+  });
+  decorateNodes(node);
+
+  node
+    .on("mousemove", (e, d) => showTip(e, d))
+    .on("mouseleave", hideTip)
+    .on("click", (e, d) => { e.stopPropagation(); if (d.kind === "person") openHolderModal(d); })
+    .call(d3.drag()
+      .on("start", (e, d) => { if (!e.active) tmSim.alphaTarget(0.25).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("end", (e, d) => { if (!e.active) tmSim.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  if (tmSim) tmSim.stop();
+  if (token) { token.fx = width / 2; token.fy = height / 2; } // the token anchors the picture
+  tmSim = d3.forceSimulation(nodes)
+    .force("link", d3.forceLink(links).id((d) => d.id)
+      .distance((l) => (l.target.r || 40) + (l.source.r || 12) + 6).strength(1))
+    .force("charge", d3.forceManyBody().strength(-30))
+    .force("collide", d3.forceCollide().radius((d) => d.r + 3).iterations(4))
+    .force("x", d3.forceX(width / 2).strength(0.02))
+    .force("y", d3.forceY(height / 2).strength(0.02))
+    .on("tick", () => {
+      link.attr("x1", (d) => d.source.x).attr("y1", (d) => d.source.y)
+        .attr("x2", (d) => d.target.x).attr("y2", (d) => d.target.y);
+      node.attr("transform", (d) => `translate(${d.x},${d.y})`);
+    });
+}
+
+function renderTokenSide(data) {
+  const t = data.token;
+  const holders = data.nodes.filter((n) => n.kind === "person");
+  const info = chainInfo(t);
+  const side = document.getElementById("tmSide");
+  const money = (v) => (v == null ? "—" : fmtUsd(v));
+  const signed = (v) => (v == null ? "—" : `<span class="${v >= 0 ? "pos" : "neg"}">${v >= 0 ? "+" : "−"}${fmtUsd(Math.abs(v))}</span>`);
+
+  let html = "";
+  if (t.hidden) html += `<div class="modal-note">Hidden from the graph — restore it from the Tokens panel.</div>`;
+  else if (t.dead) html += `<div class="modal-note">Everyone tracked has exited — not drawn on the graph.</div>`;
+  else if (!findOnGraph(String(t.token_key))) {
+    html += `<div class="modal-note">Not among the bubbles right now — outside the current chain, window, mcap, % or top-N filters.</div>`;
+  }
+
+  html += `<h4>Token</h4><dl class="kv">
+    <dt>chain</dt><dd><span class="badge" style="background:${info.color}22;color:${info.color}">${escapeHtml(canonTag(t.chain_tag) || t.chain)}</span></dd>
+    <dt>address</dt><dd>${t.resolved ? escapeHtml(t.token_key) : "— (ticker only)"}</dd>
+    <dt>market cap</dt><dd>${money(t.mcap_usd)}</dd>
+    <dt>fdv</dt><dd>${money(t.fdv_usd)}</dd>
+    <dt>mcap seen</dt><dd>${agoSpan(t.mcap_as_of)}</dd>
+    <dt>holding now</dt><dd>${t.n_holders} of ${t.n_positions}</dd>
+    <dt>alerts</dt><dd>${t.n_events ?? "—"}</dd>
+    <dt>first seen</dt><dd>${agoSpan(t.first_seen)}</dd>
+    <dt>last action</dt><dd>${agoSpan(t.last_action)}</dd>
+  </dl>`;
+  if (t.resolved) {
+    html += `<div class="modal-actions">
+      <a class="btn small" href="${gmgnUrl(t)}" target="_blank" rel="noopener">📈 chart on GMGN</a>
+      <button class="btn small" id="tmCopy">⧉ copy address</button>
+    </div>`;
+  }
+
+  html += `<h4>Holders · ${holders.length}</h4>`;
+  if (!holders.length) html += `<div class="panel-hint">No positions recorded.</div>`;
+  for (const h of holders) {
+    const sold = h.status === "SOLD";
+    const pct = sold ? `sold · peak ${fmtPct(h.peak_pct)}` : fmtPct(h.pct_supply);
+    html += `<div class="holder-row${sold ? " sold" : ""}" title="${escapeHtml(h.handle || "")}">
+      <span class="dot" style="background:${h.color}"></span>
+      <span class="name">${escapeHtml(h.person || h.handle || "?")}</span>
+      <span class="pct">${pct}</span>
+      <span class="meta">
+        bought ${fmtPct(h.bought_pct)} · sold ${fmtPct(h.sold_pct)}${h.confidence === "low" ? " · est." : ""}<br>
+        in ${money(h.invested_usd)} · out ${money(h.realized_usd)} · pnl ${signed(h.pnl_usd)}<br>
+        entry @ ${money(h.avg_entry_mcap_usd || h.entry_mcap_usd)} · ${h.n_events} alert${h.n_events === 1 ? "" : "s"} ·
+        ${agoSpan(h.first_seen)} → ${agoSpan(h.last_seen)}
+      </span>
+    </div>`;
+  }
+  side.innerHTML = html;
+
+  const copy = document.getElementById("tmCopy");
+  if (copy) {
+    copy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(String(t.token_key));
+        copy.textContent = "✓ copied";
+        setTimeout(() => { copy.textContent = "⧉ copy address"; }, 1500);
+      } catch (_) { toast("Couldn't access the clipboard.", 4000); }
+    });
+  }
+}
+
+/* ---------- holder window ----------
+ * Click a holder bubble: their position in that token in full, every token
+ * the wallet holds underneath, and a button that asks the chain what the
+ * wallet really holds of each. */
+
+const holderModal = document.getElementById("holderModal");
+const hmVerify = document.getElementById("hmVerify");
+let holderData = null;
+
+const fmtMoney = (v) => (v == null ? "—" : fmtUsd(v));
+const fmtSigned = (v) => (v == null ? "—"
+  : `<span class="${v >= 0 ? "pos" : "neg"}">${v >= 0 ? "+" : "−"}${fmtUsd(Math.abs(v))}</span>`);
+const chainBadge = (t) => {
+  const info = chainInfo(t);
+  return `<span class="badge" style="background:${info.color}22;color:${info.color}">${escapeHtml(canonTag(t.chain_tag) || t.chain)}</span>`;
+};
+
+async function openHolderModal(d) {
+  const p = new URLSearchParams({ trader_key: d.trader_key || "" });
+  const tokenId = d.token_id || (d.id.startsWith("pos:") ? `token:${d.id.split(":").slice(1, 3).join(":")}` : "");
+  const [, chain, ...rest] = tokenId.split(":");
+  if (chain) { p.set("chain", chain); p.set("token_key", rest.join(":")); }
+  try {
+    const res = await fetch(`/api/holder?${p}`);
+    if (!res.ok) throw new Error((await res.json()).detail || `HTTP ${res.status}`);
+    holderData = await res.json();
+  } catch (err) {
+    toast(`Couldn't load holder: ${escapeHtml(err.message)}`, 6000);
+    return;
+  }
+  holderModal.hidden = false;
+  raise(holderModal);
+  hideTip();
+  renderHolderModal();
+}
+
+function closeHolderModal() {
+  holderModal.hidden = true;
+}
+
+// Block explorer address pages, per canonical chain tag. An EVM wallet is the
+// same address on every EVM chain, so a link is offered for each chain the
+// wallet has actually traded on (from its positions), not the whole list.
+const EXPLORERS = {
+  SOL:    ["Solscan",      "https://solscan.io/account/"],
+  ETH:    ["Etherscan",    "https://etherscan.io/address/"],
+  BSC:    ["BscScan",      "https://bscscan.com/address/"],
+  BASE:   ["Basescan",     "https://basescan.org/address/"],
+  ARB:    ["Arbiscan",     "https://arbiscan.io/address/"],
+  OP:     ["Etherscan",    "https://optimistic.etherscan.io/address/"],
+  POLY:   ["Polygonscan",  "https://polygonscan.com/address/"],
+  AVAX:   ["Snowscan",     "https://snowscan.xyz/address/"],
+  BLAST:  ["Blastscan",    "https://blastscan.io/address/"],
+  ABS:    ["Abscan",       "https://abscan.org/address/"],
+  HYPE:   ["HyperEVMScan", "https://hyperevmscan.io/address/"],
+  LINEA:  ["Lineascan",    "https://lineascan.build/address/"],
+  SONIC:  ["Sonicscan",    "https://sonicscan.org/address/"],
+  MONAD:  ["Monadscan",    "https://monadscan.com/address/"],
+  UNI:    ["Uniscan",      "https://uniscan.xyz/address/"],
+  ZK:     ["Era explorer", "https://era.zksync.network/address/"],
+  SCROLL: ["Scrollscan",   "https://scrollscan.com/address/"],
+  MANTLE: ["Mantlescan",   "https://mantlescan.xyz/address/"],
+  BERA:   ["Berascan",     "https://berascan.com/address/"],
+  SEI:    ["Seitrace",     "https://seitrace.com/address/"],
+  CRO:    ["Cronoscan",    "https://cronoscan.com/address/"],
+  XLAYER: ["OKLink",       "https://www.oklink.com/xlayer/address/"],
+  WORLD:  ["Worldscan",    "https://worldscan.org/address/"],
+  INK:    ["Ink explorer", "https://explorer.inkonchain.com/address/"],
+  PLASMA: ["Plasmascan",   "https://plasmascan.to/address/"],
+  GNOSIS: ["Gnosisscan",   "https://gnosisscan.io/address/"],
+  CELO:   ["Celoscan",     "https://celoscan.io/address/"],
+  TRON:   ["Tronscan",     "https://tronscan.org/#/address/"],
+};
+
+function renderHolderLinks(h) {
+  const box = document.getElementById("hmLinks");
+  if (!h.is_wallet) { box.hidden = true; box.innerHTML = ""; return; }
+  const addr = String(h.trader_key);
+  const isEvm = /^0x[a-fA-F0-9]{40}$/.test(addr);
+
+  // Chains this wallet has traded on, the clicked position's chain first.
+  const tags = [];
+  const seen = new Set();
+  for (const e of [h.focus, ...h.positions].filter(Boolean)) {
+    const t = e.token;
+    const tag = canonTag(t.chain_tag) || (t.chain === "solana" ? "SOL" : "");
+    if (tag && !seen.has(tag)) { seen.add(tag); tags.push(tag); }
+  }
+
+  const a = (label, url, tag) => {
+    const info = tag ? CHAINS[tag] : null;
+    const badge = info
+      ? `<span class="badge" style="background:${info.color}22;color:${info.color}">${escapeHtml(tag)}</span>` : "";
+    return `<a class="btn small" href="${escapeHtml(url + addr)}" target="_blank" rel="noopener" title="${escapeHtml(addr)} on ${escapeHtml(label)}">${badge}${escapeHtml(label)} ↗</a>`;
+  };
+  let html = `<span class="cap">wallet</span><span class="addr" title="${escapeHtml(addr)}">${displaySymbol(addr)}</span>`;
+  const known = tags.filter((t) => EXPLORERS[t]);
+  for (const tag of known) html += a(EXPLORERS[tag][0], EXPLORERS[tag][1], tag);
+  // Trading-focused wallet pages: GMGN for the chain in focus, DeBank across
+  // every EVM chain at once (also the fallback when a chain has no explorer above).
+  const gm = tags.map((t) => GMGN_SLUGS[t]).find(Boolean);
+  if (gm) html += a("GMGN wallet", `https://gmgn.ai/${gm}/address/`);
+  if (isEvm) html += a("DeBank", "https://debank.com/profile/");
+  html += `<button class="btn small" id="hmCopy" title="copy the full address">⧉ copy</button>`;
+  box.innerHTML = html;
+  box.hidden = false;
+  document.getElementById("hmCopy").addEventListener("click", async (e) => {
+    try {
+      await navigator.clipboard.writeText(addr);
+      e.currentTarget.textContent = "✓ copied";
+      setTimeout(() => { const b = document.getElementById("hmCopy"); if (b) b.textContent = "⧉ copy"; }, 1500);
+    } catch (_) { toast("Couldn't access the clipboard.", 4000); }
+  });
+}
+
+function renderHolderModal() {
+  const h = holderData;
+  const name = h.person || h.handle || displaySymbol(h.trader_key);
+  document.getElementById("hmDot").style.background = h.color || personColor(name);
+  document.getElementById("hmTitle").textContent = name;
+  renderHolderLinks(h);
+  document.getElementById("hmSub").innerHTML =
+    `${h.handle && h.handle !== name ? `${escapeHtml(h.handle)} · ` : ""}` +
+    `${h.is_wallet ? `<span title="${escapeHtml(h.trader_key)}">${displaySymbol(h.trader_key)}</span> · ` : ""}` +
+    `${h.n_holding} holding · ${h.n_sold} exited`;
+  const checkable = h.positions.filter((e) => e.status === "HOLDING" && e.token.resolved);
+  hmVerify.disabled = !h.is_wallet || !checkable.length;
+  hmVerify.title = !h.is_wallet
+    ? "no full wallet address for this trader — nothing to check on-chain"
+    : !checkable.length ? "no address-keyed holdings to check"
+    : `check this wallet's real balance of ${checkable.length} token${checkable.length === 1 ? "" : "s"}, on-chain`;
+
+  let html = "";
+  const f = h.focus;
+  if (f) {
+    const t = f.token;
+    const sold = f.status !== "HOLDING";
+    const ver = f.verified;
+    html += `<div class="focus-card">
+      <div class="head">
+        <span class="sym">${escapeHtml(displaySymbol(t.symbol))}</span>${chainBadge(t)}
+        <span class="pill ${sold ? "exited" : "holding"}">${sold ? "exited" : "holding"}</span>
+        <span class="mc">MC ${fmtMoney(t.mcap_usd)}${fdvDiffers(t) ? ` · FDV ${fmtMoney(t.fdv_usd)}` : ""}</span>
+        <button class="btn small" data-show-token="${escapeHtml(String(t.token_key))}">show token</button>
+      </div>
+      <dl class="kv">
+        <dt>${sold ? "peak share" : "share held"}</dt><dd>${fmtPct(sold ? f.peak_pct : f.pct_supply)}${f.confidence === "low" ? " (estimated)" : ""}</dd>
+        <dt>bought / sold</dt><dd>${fmtPct(f.bought_pct)} / ${fmtPct(f.sold_pct)}</dd>
+        <dt>invested</dt><dd>${fmtMoney(f.invested_usd)}</dd>
+        <dt>realised</dt><dd>${fmtMoney(f.realized_usd)}</dd>
+        <dt>pnl</dt><dd>${fmtSigned(f.pnl_usd)}</dd>
+        <dt>entry mcap</dt><dd>${fmtMoney(f.avg_entry_mcap_usd || f.entry_mcap_usd)}${f.entry_mcap_usd && f.avg_entry_mcap_usd && f.entry_mcap_usd !== f.avg_entry_mcap_usd ? ` (first ${fmtMoney(f.entry_mcap_usd)})` : ""}</dd>
+        <dt>alerts</dt><dd>${f.n_events}</dd>
+        <dt>first → last</dt><dd>${agoSpan(f.first_seen)} → ${agoSpan(f.last_seen)}</dd>
+        <dt>on-chain</dt><dd>${ver ? `${fmtPct(ver.pct)} · checked ${agoSpan(ver.ts)}` : "not verified yet"}</dd>
+        <dt>token</dt><dd>${t.n_holders} tracked holding · ${t.n_positions} positions · last action ${agoSpan(t.last_action)}</dd>
+      </dl>
+    </div>`;
+  }
+
+  const holding = h.positions.filter((e) => e.status === "HOLDING");
+  const exited = h.positions.filter((e) => e.status !== "HOLDING");
+  const row = (e) => {
+    const t = e.token;
+    const sold = e.status !== "HOLDING";
+    const ver = e.verified;
+    let verHtml = "";
+    if (ver) {
+      const off = e.pct_supply != null && ver.pct != null && Math.abs(ver.pct - e.pct_supply) > Math.max(0.01, e.pct_supply * 0.1);
+      verHtml = `<span class="ver${off ? " off" : ""}" title="on-chain share, checked ${fmtAgo(ver.ts)}">⛓ ${fmtPct(ver.pct)}</span>`;
+    }
+    return `<div class="tok-row${sold ? " sold" : ""}" data-show-token="${escapeHtml(String(t.token_key))}" title="open this token">
+      <span class="sym">${escapeHtml(displaySymbol(t.symbol))} ${chainBadge(t)}</span>
+      <span class="num">${fmtPct(sold ? e.peak_pct : e.pct_supply)}<small>${sold ? "peak" : "share"}</small></span>
+      <span class="num">${fmtMoney(t.mcap_usd)}<small>mcap</small></span>
+      <span class="num">${fmtSigned(e.pnl_usd)}<small>pnl</small></span>
+      <span class="meta">in ${fmtMoney(e.invested_usd)} · out ${fmtMoney(e.realized_usd)} · entry @ ${fmtMoney(e.avg_entry_mcap_usd || e.entry_mcap_usd)} · ${e.n_events} alert${e.n_events === 1 ? "" : "s"} · ${agoSpan(e.last_seen)} ${verHtml}</span>
+    </div>`;
+  };
+  html += `<h4>Holding · ${holding.length}</h4>`;
+  html += holding.length ? holding.map(row).join("") : `<div class="panel-hint">Nothing held right now.</div>`;
+  if (exited.length) {
+    html += `<details><summary>${exited.length} exited position${exited.length === 1 ? "" : "s"}</summary>${exited.map(row).join("")}</details>`;
+  }
+  const body = document.getElementById("hmBody");
+  body.innerHTML = html;
+  body.querySelectorAll("[data-show-token]").forEach((el) => {
+    el.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeHolderModal();
+      searchToken(el.dataset.showToken);
+    });
+  });
+}
+
+document.getElementById("hmClose").addEventListener("click", closeHolderModal);
+holderModal.addEventListener("click", (e) => { if (e.target === holderModal) closeHolderModal(); });
+
+hmVerify.addEventListener("click", async () => {
+  if (!holderData) return;
+  const h = holderData;
+  const tokens = h.positions
+    .filter((e) => e.status === "HOLDING" && e.token.resolved)
+    .map((e) => ({ chain: e.token.chain, token_key: e.token.token_key }));
+  if (!tokens.length) return;
+  hmVerify.disabled = true;
+  hmVerify.textContent = "verifying…";
+  const label = `verifying ${h.person || h.handle || displaySymbol(h.trader_key)}`;
+  const stopProgress = trackVerifyProgress(label, tokens.length);
+  try {
+    const res = await fetch("/api/verify_wallet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ trader_key: h.trader_key, tokens }),
+    });
+    const out = await res.json();
+    if (!res.ok) {
+      toast(`⚠️ Verify failed: ${escapeHtml(out.detail || res.status)}`);
+    } else {
+      const lines = out.results
+        .map((r) => r.error
+          ? `${escapeHtml(displaySymbol(r.symbol || r.token_key))}: ${escapeHtml(r.error)}`
+          : `${escapeHtml(displaySymbol(r.symbol || r.token_key))}: ${fmtPct(r.pct)} on-chain`)
+        .join("<br>");
+      toast(`✅ <strong>${escapeHtml(h.person || h.handle || displaySymbol(h.trader_key))}</strong> checked on-chain ` +
+        `(${out.verified}/${out.checked} tokens)<br>${lines}`, 12000, "ok");
+      // Fresh numbers: re-read the wallet (verified shares, rebuilt positions)
+      // and let the graph pick the rebuild up without losing the view.
+      const f = h.focus;
+      const p = new URLSearchParams({ trader_key: h.trader_key });
+      if (f) { p.set("chain", f.token.chain); p.set("token_key", f.token.token_key); }
+      const again = await fetch(`/api/holder?${p}`);
+      if (again.ok) { holderData = await again.json(); renderHolderModal(); }
+      load(false, true);
+    }
+  } catch (err) {
+    toast(`⚠️ Verify failed: ${escapeHtml(err.message)}`);
+  } finally {
+    stopProgress();
+    hmVerify.textContent = "✓ verify holdings";
+    if (holderData) renderHolderModal(); // restores the button's enabled state
+  }
+});
+
 /* ---------- per-token action buttons ---------- */
 
 const nodeActions = document.getElementById("nodeActions");
@@ -1366,16 +2467,15 @@ const actChart = document.getElementById("actChart");
 const actHide = document.getElementById("actHide");
 let selectedToken = null; // { d, circle }
 
-// gmgn.ai path slug per chain tag: gmgn.ai/<slug>/token/<address>
+// gmgn.ai path slug per (canonical) chain tag: gmgn.ai/<slug>/token/<address>
 const GMGN_SLUGS = {
-  SOL: "sol", SOLANA: "sol",
-  ETH: "eth", BSC: "bsc", BASE: "base",
-  RH: "robinhood", ROBINHOOD: "robinhood",
-  HYPE: "hyperevm", ARB: "arb", ABS: "abstract",
+  SOL: "sol", ETH: "eth", BSC: "bsc", BASE: "base", RH: "robinhood",
+  HYPE: "hyperevm", ARB: "arb", ABS: "abstract", BLAST: "blast", TRON: "tron",
+  MONAD: "monad",
 };
 
 function gmgnUrl(d) {
-  const tag = (d.chain_tag || "").toUpperCase();
+  const tag = canonTag(d.chain_tag);
   const slug = GMGN_SLUGS[tag] || (d.chain === "solana" ? "sol" : tag.toLowerCase() || "eth");
   return `https://gmgn.ai/${slug}/token/${d.token_key}`;
 }
@@ -1385,6 +2485,9 @@ function selectToken(d, gEl) {
   // Ticker-keyed tokens have no contract address: nothing to chart or
   // verify — but hiding still works, so the popup stays available.
   actVerify.hidden = actChart.hidden = !d.resolved;
+  // Not raise()d: this is a map annotation that follows its bubble, so it must
+  // stay below dropdowns, panels and windows (CSS z-index 14) or it paints
+  // over an open chain/user menu whenever the bubble drifts underneath it.
   nodeActions.hidden = false;
   updateNodeActions();
 }
@@ -1522,11 +2625,18 @@ function feedRowHtml(it) {
         <span class="sym">${it.title || "(no text)"}</span>${when}</div>` +
       (it.detail ? `<div class="body">${it.detail}</div>` : "");
   }
+  // Wallet-to-wallet moves are not trades: their own pill, and the other
+  // wallet named instead of a dollar figure (there is none).
+  const xferOut = it.type === "TRANSFER_OUT";
+  const xferIn = it.type === "TRANSFER_IN";
   const pill = it.type === "BUY"
     ? `<span class="pill buy">BUY</span>`
+    : xferOut ? `<span class="pill xfer" title="tokens moved to another wallet — not a sale">MOVE →</span>`
+    : xferIn ? `<span class="pill xfer" title="tokens received from another wallet — not a buy">← MOVE</span>`
     : `<span class="pill sell">${it.is_exit ? "EXIT" : "SELL"}</span>`;
   const bits = [
     it.who ? displaySymbol(String(it.who)) : null,
+    it.counterparty ? `${xferIn ? "from" : "to"} ${displaySymbol(String(it.counterparty))}` : null,
     it.pct_supply != null ? fmtPct(it.pct_supply) : null,
     it.amount_usd != null ? fmtUsd(it.amount_usd) : null,
     it.mcap_usd != null ? `MC ${fmtUsd(it.mcap_usd)}` : null,
@@ -1571,6 +2681,7 @@ async function openLinkMenu(it, x, y) {
   linkMenu.innerHTML = `<div class="ctx-head">${it.symbol ? displaySymbol(it.symbol) : "alert"} · links</div>
     <div class="ctx-empty">loading…</div>`;
   linkMenu.hidden = false;
+  raise(linkMenu);
   placeMenu(x, y);
   if (!it.raw_id) {
     linkMenu.querySelector(".ctx-empty").textContent = "no source message for this row";
@@ -1788,7 +2899,7 @@ const hhmm = (secs) => {
 async function loadActivity() {
   try {
     const p = new URLSearchParams({ start: viewedDay(), bucket: actBucket });
-    if (controls.chain.value) p.set("chain", controls.chain.value);
+    if (selectedChains.size) p.set("chain", [...selectedChains].join(","));
     const res = await fetch(`/api/activity?${p}`);
     activity = await res.json();
     renderActivity();
@@ -1938,34 +3049,89 @@ async function openActivityPop(i, clientX) {
   const list = document.getElementById("actPopList");
   list.innerHTML = `<div class="note">loading…</div>`;
   actPop.hidden = false;
+  raise(actPop);
   actTip.hidden = true;
 
-  // Anchor under the clicked bucket, kept inside the strip's box.
+  // Anchor under the clicked bucket, kept inside the viewport. The popover
+  // lives outside the header (which is its own stacking context) so it can
+  // be raised above modals like any other floating layer.
   const box = document.getElementById("activity").getBoundingClientRect();
-  const left = Math.max(0, Math.min(box.width - actPop.offsetWidth, clientX - box.left - actPop.offsetWidth / 2));
+  const left = Math.max(8, Math.min(window.innerWidth - actPop.offsetWidth - 8, clientX - actPop.offsetWidth / 2));
   actPop.style.left = `${left}px`;
+  actPop.style.top = `${box.bottom + 8}px`;
 
   try {
     const p = new URLSearchParams({ start: t0, end: t1 });
-    if (controls.chain.value) p.set("chain", controls.chain.value);
+    if (selectedChains.size) p.set("chain", [...selectedChains].join(","));
     const res = await fetch(`/api/activity/txs?${p}`);
     const data = await res.json();
     if (actOpen !== i) return; // user clicked elsewhere meanwhile
-    list.innerHTML = "";
-    for (const it of data.items) list.append(makeFeedRow(it));
-    if (!data.items.length) {
-      list.innerHTML = `<div class="note">No trades in this window.</div>`;
-    } else if (data.items.length < b.tx) {
-      // The snapshot remembers more than the event history still holds —
-      // an older rebuild window dropped the rest.
-      list.insertAdjacentHTML("beforeend",
-        `<div class="note">${b.tx - data.items.length} more transaction(s) are in the day's totals
-         but no longer in the event history (rebuilt with a shorter window).</div>`);
-    }
+    actItems = data.items;
+    actMissing = Math.max(0, b.tx - data.items.length);
+    renderActPopList();
   } catch (_) {
     list.innerHTML = `<div class="note">Couldn't load trades — try again.</div>`;
   }
 }
+
+// The open bucket's trades, plus the buy/sell filter and sort applied to
+// them client-side (the list is at most a few hundred rows).
+let actItems = [];
+let actMissing = 0;
+let actKind = "all";                       // all | buy | sell
+let actSort = { key: "ts", dir: -1 };      // dir: -1 = descending, 1 = ascending
+const ACT_SORT_LABELS = { ts: "time", mcap_usd: "mcap", amount_usd: "$ amount", pct_supply: "% supply" };
+
+function renderActPopList() {
+  const list = document.getElementById("actPopList");
+  const { key, dir } = actSort;
+  const rows = actItems
+    .filter((it) => actKind === "all" || String(it.type).toLowerCase() === actKind)
+    .sort((a, b) => {
+      const av = a[key], bv = b[key];
+      if (av == null && bv == null) return b.ts - a.ts;
+      if (av == null) return 1;               // unknown values always last
+      if (bv == null) return -1;
+      return (av - bv) * dir || b.ts - a.ts;   // ties: newest first
+    });
+  list.innerHTML = "";
+  for (const it of rows) list.append(makeFeedRow(it));
+  if (!actItems.length) {
+    list.innerHTML = `<div class="note">No trades in this window.</div>`;
+  } else if (!rows.length) {
+    list.innerHTML = `<div class="note">No ${actKind}s in this window.</div>`;
+  }
+  if (actMissing) {
+    // The snapshot remembers more than the event history still holds —
+    // an older rebuild window dropped the rest.
+    list.insertAdjacentHTML("beforeend",
+      `<div class="note">${actMissing} more transaction(s) are in the day's totals
+       but no longer in the event history (rebuilt with a shorter window).</div>`);
+  }
+}
+
+document.getElementById("actPopKind").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-kind]");
+  if (!btn) return;
+  actKind = btn.dataset.kind;
+  for (const b of btn.parentElement.children) b.classList.toggle("active", b === btn);
+  renderActPopList();
+});
+
+document.getElementById("actPopSort").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-key]");
+  if (!btn) return;
+  const key = btn.dataset.key;
+  // Same key again flips the direction; a new key starts descending
+  // (newest / biggest first), which is what people look for.
+  actSort = key === actSort.key ? { key, dir: -actSort.dir } : { key, dir: -1 };
+  for (const b of btn.parentElement.children) {
+    const active = b.dataset.key === actSort.key;
+    b.classList.toggle("active", active);
+    b.textContent = ACT_SORT_LABELS[b.dataset.key] + (active ? (actSort.dir < 0 ? " ▼" : " ▲") : "");
+  }
+  renderActPopList();
+});
 
 function closeActivityPop() {
   if (actPop.hidden) return;
@@ -1983,7 +3149,6 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeActiv
 
 new ResizeObserver(() => renderActivity()).observe(document.getElementById("activity"));
 setInterval(() => { if (actDay === null) loadActivity(); }, 5 * 60 * 1000);
-controls.chain.addEventListener("input", () => { closeActivityPop(); loadActivity(); });
 syncDayControls();
 loadActivity();
 
@@ -2006,6 +3171,7 @@ setInterval(async () => {
     prevRaw = h.raw_messages;
 
     handleEliminations(h.eliminations);
+    updateWalletsBadge(h.wallet_suggestions_new);
 
     // Data signature: counts plus the positions-rebuild stamp. The stamp
     // matters — a live alert first inserts events, then rebuilds positions a

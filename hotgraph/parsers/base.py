@@ -12,43 +12,29 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable
 
 BUY, SELL = "BUY", "SELL"
+# Tokens sent to a plain wallet with nothing received are a move between
+# wallets, not a sale: the sender's side is TRANSFER_OUT and the recipient
+# wallet gets a mirrored TRANSFER_IN, so the holding follows the tokens.
+TRANSFER_OUT, TRANSFER_IN = "TRANSFER_OUT", "TRANSFER_IN"
 
 # --------------------------------------------------------------------------
 # Chains
 # --------------------------------------------------------------------------
 
-# The alerts lead with a bracket tag: [SOL], [BASE], [BSC], [RH]...
-# Tags observed in the real bot feeds map to a chain family; family decides
-# address normalization (EVM addresses are case-insensitive).
-CHAIN_TAGS = {
-    "SOL": "solana",
-    "SOLANA": "solana",
-    "ETH": "evm",
-    "BASE": "evm",
-    "BSC": "evm",
-    "BNB": "evm",
-    "ARB": "evm",
-    "ARBITRUM": "evm",
-    "POLY": "evm",
-    "MATIC": "evm",
-    "AVAX": "evm",
-    "OP": "evm",
-    "BLAST": "evm",
-    "RH": "evm",          # Robinhood chain
-    "ROBINHOOD": "evm",
-    "ARC": "evm",
-    "STBL": "evm",
-    "ABS": "evm",         # Abstract
-    "HYPE": "evm",        # HyperEVM
-    "TRON": "tron",
-}
+# The alerts lead with a bracket tag: [SOL], [BASE], [BSC], [RH]... The
+# registry in hotgraph/chains.py maps every tag (and alias) to a chain
+# family; family decides address normalization (EVM addresses are
+# case-insensitive).
+from ..chains import CHAIN_TAGS, chain_from_tag  # noqa: F401  (re-exported)
 
 # Currencies traders pay WITH. Whichever leg of a swap is not one of these is
 # the token we care about — this is how side is determined, rather than
 # trusting the header tag (an alert tagged "(OUT)" can still be a buy).
 QUOTE_SYMBOLS = {
     "SOL", "WSOL", "ETH", "WETH", "BNB", "WBNB", "MATIC", "WMATIC", "AVAX",
-    "HYPE", "WHYPE",
+    "HYPE", "WHYPE", "POL", "WPOL", "MON", "WMON", "BERA", "WBERA", "SEI", "WSEI",
+    "CRO", "WCRO", "OKB", "WOKB", "MNT", "WMNT", "XPL", "WXPL", "XDAI", "WXDAI",
+    "CELO", "TRX", "WTRX",
     "USDC", "USDT", "DAI", "BUSD", "USDE", "FDUSD", "USD COIN", "TETHER",
     "USDC.E", "USDT0", "USDG", "GLOBAL DOLLAR", "WBTC", "CBBTC",
     "USDS", "USDS STABLECOIN", "USD1", "PYUSD", "TUSD", "TETHER USD",
@@ -62,11 +48,6 @@ STABLES = {
     "DAI STABLECOIN",
 }
 
-
-def chain_from_tag(tag: str | None) -> str | None:
-    if not tag:
-        return None
-    return CHAIN_TAGS.get(tag.strip().upper())
 
 
 def is_quote(symbol: str | None, name: str | None = None) -> bool:
@@ -103,6 +84,9 @@ class Event:
     pnl_usd: float | None = None
     pnl_x: float | None = None
     tx_hash: str | None = None        # from the TX link; used for cross-bot dedup
+    # Transfers only: the other wallet (recipient for TRANSFER_OUT, sender
+    # for TRANSFER_IN) — full address when the alert linked it.
+    counterparty: str | None = None
 
     def as_dict(self) -> dict:
         return asdict(self)
@@ -283,7 +267,7 @@ def utf16_offset(text: str, index: int) -> int:
 
 
 # Links pasted inline, as Telegram's "copy with links" writes them:
-# "PGmgn (https://bscscan.com/address/0x...)". Both the parenthesised and the
+# "NickA (https://bscscan.com/address/0x...)". Both the parenthesised and the
 # bare form are recognised so a forwarded/exported alert parses like a live one.
 RE_INLINE_URL = re.compile(r"\s*\(?(https?://[^\s()]+)\)?")
 
@@ -422,7 +406,7 @@ def token_key_for(addr: str | None, symbol: str | None, name: str | None = None)
 
 
 # --------------------------------------------------------------------------
-# Header: "[SOL] [BUY] - (FOMO BUY) @loganlim_x — S: 1"
+# Header: "[SOL] [BUY] - (FOMO BUY) @trader_one — S: 1"
 # --------------------------------------------------------------------------
 
 # A status emoji may precede the tag: "🔴 [BSC] 2 wallets sold ..."
@@ -444,9 +428,9 @@ def parse_header(text: str) -> Header:
     """Read the first line of an alert.
 
     Handles all three observed shapes:
-        [SOL] [BUY] - (FOMO BUY) @loganlim_x — S: 1
-        [BASE] [PRI] - (OUT) joswe — S: 1
-        [BSC] dimiNew — S: 1
+        [SOL] [BUY] - (FOMO BUY) @trader_one — S: 1
+        [BASE] [PRI] - (OUT) alice — S: 1
+        [BSC] EveTest — S: 1
     """
     line = (text or "").strip().splitlines()[0] if (text or "").strip() else ""
     hdr = Header()
@@ -474,7 +458,7 @@ def classify_who(s: str | None) -> tuple[str, str] | None:
     """What kind of identity is this string?
 
     Returns (kind, normalized) where kind is:
-        'handle'        Telegram handle / bot label ("@loganlim_x", "dimiNew")
+        'handle'        Telegram handle / bot label ("@trader_one", "EveTest")
         'address'       full EVM or Solana address
         'trunc_address' truncated display form ("DF1o...7QBH")
 

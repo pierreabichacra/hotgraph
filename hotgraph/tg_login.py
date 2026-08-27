@@ -3,7 +3,7 @@
     python -m hotgraph.tg_login
 
 This writes data/hotgraph.session — a NEW authorized device on your account.
-Your existing sessions (oiltraderbot, Telegram Desktop, phone) keep running
+Your existing sessions (your other b, Telegram Desktop, phone) keep running
 untouched. Telegram allows many concurrent sessions; the error people hit
 (AUTH_KEY_DUPLICATED) comes from two processes sharing ONE session file, which
 is exactly what this separate file avoids.
@@ -43,12 +43,16 @@ async def main() -> None:
     print(f"\nLogged in as {name}  @{me.username or '-'}  (id {me.id})")
     print("Check Telegram -> Settings -> Devices; a new device is now listed.")
     print("Your other sessions are unaffected.\n")
-    print("Next: fill in config/sources.yaml, then run")
-    print("  python -m hotgraph.capture --list      # find the bots in your chats")
-    print("  python -m hotgraph.capture --backfill  # pull their history")
+    print("Next: python start.py  (or python -m hotgraph.run) — it catches up on")
+    print("the bots in config/sources.yaml and serves the page.")
 
     await client.disconnect()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, EOFError):
+        # Aborted at a prompt — no traceback; the caller (start.py) removes
+        # the half-written session file and says how to retry.
+        raise SystemExit(130)

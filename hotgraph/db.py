@@ -10,7 +10,7 @@ Because raw_messages is permanent, fixing a bad parser is a re-run of
 `ingest.py`, not a re-scrape of Telegram.
 
 A "trader" is keyed by `trader_key`: the bot's handle for that person when it
-prints one (@loganlim_x, joswe, dimiNew), otherwise a wallet address. The real
+prints one (@trader_one, alice, EveTest), otherwise a wallet address. The real
 alerts identify people by handle, and the wallet addresses they show are
 truncated ("DF1o...7QBH") and so unusable as keys on their own.
 """
@@ -64,11 +64,21 @@ CREATE TABLE IF NOT EXISTS events (
     pnl_usd       REAL,
     pnl_x         REAL,
     tx_hash       TEXT,                    -- from the TX link; enables cross-bot dedup
+    counterparty  TEXT,                    -- transfers: the other wallet (see parsers.base)
     ts            INTEGER NOT NULL,
     UNIQUE (raw_id, trader_key, token_key, side)
 );
 CREATE INDEX IF NOT EXISTS idx_events_key ON events (chain, token_key, trader_key, ts);
 CREATE INDEX IF NOT EXISTS idx_events_ts  ON events (ts);
+-- idx_events_side (side, counterparty) is created in _migrate(): on a database
+-- from before the counterparty column existed, the column must be added first.
+
+-- Suspected-wallet suggestions the user waved away (a transfer recipient
+-- that is NOT one of the sender's wallets — an exchange deposit, a friend).
+CREATE TABLE IF NOT EXISTS wallet_dismissed (
+    trader_key  TEXT PRIMARY KEY,
+    ts          INTEGER NOT NULL
+);
 
 -- Tier 3: derived state ----------------------------------------------------
 CREATE TABLE IF NOT EXISTS tokens (
@@ -208,9 +218,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ("tx_hash", "TEXT"),
         ("holds_pct", "REAL"),
         ("holds_amount", "REAL"),
+        ("counterparty", "TEXT"),
     ):
         if col not in cols:
             conn.execute(f"ALTER TABLE events ADD COLUMN {col} {decl}")
+    # Needs the counterparty column, so it cannot live in SCHEMA.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_events_side ON events (side, counterparty)")
 
     tcols = {r["name"] for r in conn.execute("PRAGMA table_info(tokens)")}
     if "chain_tag" not in tcols:

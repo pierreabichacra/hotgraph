@@ -45,8 +45,8 @@ def _insert_event(conn, raw_id: int, source_id: str, ev) -> bool:
               (raw_id, source, chain, chain_tag, token_key, token_symbol, token_name,
                trader_key, trader_handle, wallet_addr, side, is_exit,
                amount_tokens, amount_usd, pct_supply, holds_pct, holds_amount,
-               mcap_usd, pnl_usd, pnl_x, tx_hash, ts)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               mcap_usd, pnl_usd, pnl_x, tx_hash, counterparty, ts)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             raw_id,
             source_id,
@@ -71,6 +71,7 @@ def _insert_event(conn, raw_id: int, source_id: str, ev) -> bool:
             ev.pnl_usd,
             ev.pnl_x,
             ev.tx_hash,
+            getattr(ev, "counterparty", None),
             ev.ts,
         ),
     )

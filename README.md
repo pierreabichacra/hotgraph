@@ -26,15 +26,60 @@ dropped and rebuilt on every parse. So when a parser turns out to be wrong you
 edit the regex and re-run `ingest` — the whole stored history is re-derived
 without touching Telegram again.
 
-## Setup
+## Quick start
+
+You need:
+
+- **Python 3.10 or newer** — [python.org](https://python.org), or
+  `winget install Python.Python.3.12` / `brew install python`.
+- A **Telegram account** that has opened a chat (pressed *Start*) with each of
+  the three tracker bots listed in `config/sources.yaml`.
+- Your Telegram **api_id / api_hash** — free, from
+  [my.telegram.org](https://my.telegram.org) → *API development tools*. The
+  script asks for them the first time.
+
+Then, one command:
+
+| | |
+|---|---|
+| **Windows** | double-click `start.bat` (or `python start.py`) |
+| **macOS / Linux** | `./start.sh` (or `bash start.sh`, or `python3 start.py`) |
+
+The first run creates `.venv`, installs the requirements, asks for your
+api_id/api_hash (saved to `.env`), logs you in to Telegram (a login code is
+sent to your Telegram app; this creates `data/hotgraph.session`), pulls the
+last 31 days of alerts, and opens the page. Every run after that goes straight
+to the server — about a second, plus catching up on whatever was missed while
+the app was off.
+
+The page is at **http://127.0.0.1:8000**. New alerts appear within ~10 s, no
+refresh needed; the header shows "synced Xs ago". **Ctrl-C stops all of it**
+(in `start.bat`, answer *Y* to "Terminate batch job?").
+
+Options: `--port 9000`, `--host 0.0.0.0` (reachable from other machines),
+`--no-browser`, `--reinstall` (redo the dependency install).
+
+**⏏ Sign out** (top bar) logs the HotGraph device out of Telegram and deletes
+`data/hotgraph.session`; the app stops and `start` immediately asks for a new
+login. Captured alerts and positions are kept. The same device can also be
+revoked from Telegram → Settings → Devices ("HotGraph").
+
+### Sharing it
+
+Commit, then `git archive --format=zip -o hotgraph.zip HEAD` (or push and share
+the URL). Never zip the working directory: it holds `.env`, a live login to
+your Telegram account in `data/hotgraph.session`, the database, and `.venv`.
+
+## Manual setup (what `start.py` does)
+
+Interpreter paths below are POSIX; on Windows use `.venv\Scripts\python.exe`.
 
 ```bash
 python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 ```
 
-Credentials live in `.env` (gitignored). `.env.example` is a template — never
-put real values there, it is not ignored.
+`.env` (gitignored) holds `TG_API_ID=…` and `TG_API_HASH=…`.
 
 ### 1. Log in
 
@@ -43,33 +88,12 @@ put real values there, it is not ignored.
 ```
 
 This creates `data/hotgraph.session`, a **new** authorized device on your
-account. Telegram allows many concurrent sessions, so your oiltraderbot session
-keeps running untouched — the failure people hit (`AUTH_KEY_DUPLICATED`) comes
-from two processes sharing *one* session file, which a separate file avoids.
+account. Telegram allows many concurrent sessions, so your other sessions keep
+running untouched — the failure people hit (`AUTH_KEY_DUPLICATED`) comes from
+two processes sharing *one* session file, which a separate file avoids.
 Revoke it any time from Telegram → Settings → Devices ("HotGraph").
 
-### 2. Point it at your bots
-
-```bash
-./.venv/bin/python -m hotgraph.capture --list      # prints your bot chats + ids
-```
-
-Put the three `@usernames` into `config/sources.yaml` and set `enabled: true`.
-
-### 3. Pull history
-
-```bash
-./.venv/bin/python -m hotgraph.capture --backfill
-```
-
-### 4. Parse and build positions
-
-```bash
-./.venv/bin/python -m hotgraph.ingest
-./.venv/bin/python -m hotgraph.positions
-```
-
-### 5. Run it — one command
+### 2. Run it
 
 ```bash
 ./.venv/bin/python -m hotgraph.run                 # http://localhost:8000
@@ -77,18 +101,30 @@ Put the three `@usernames` into `config/sources.yaml` and set `enabled: true`.
 
 One process does everything: first it **catches up on alerts missed while the
 app was off** (the cursor is the highest stored message id per bot, so the gap
-fills exactly — no overlap, no misses), then it serves the page and keeps
-listening live. New alerts appear on the page within ~10 s, no refresh needed;
-the header shows "synced Xs ago". Ctrl-C stops all of it.
+fills exactly — no overlap, no misses; on a fresh database that is a 31-day
+backfill), then it serves the page and keeps listening live.
 
-The pieces still run separately if you ever want them to
-(`uvicorn hotgraph.api:app` / `python -m hotgraph.capture --live`).
+### Optional pieces
+
+`config/sources.yaml` already lists the three bots. To check your account sees
+them, pull *all* history instead of 31 days, or re-derive positions by hand:
+
+```bash
+./.venv/bin/python -m hotgraph.capture --list      # prints your bot chats + ids
+./.venv/bin/python -m hotgraph.capture --backfill  # every alert ever, not just 31 days
+./.venv/bin/python -m hotgraph.ingest              # re-parse raw messages
+./.venv/bin/python -m hotgraph.positions           # rebuild positions
+```
+
+The server and the listener still run separately if you ever want them to
+(`uvicorn hotgraph.api:app` / `python -m hotgraph.capture --live`) — but never
+alongside `hotgraph.run`, which would share the session file.
 
 ## Who shows up, and identity
 
 Every alert embeds the trader's **full wallet address** behind its
 [wallet]/address link, and that address is the canonical identity — the same
-wallet seen via different bots (labelled `joz` in one, `joswe` in another)
+wallet seen via different bots (labelled `bob` in one, `alice` in another)
 lands in one bubble automatically. Handles are display labels.
 
 When one person trades from **several wallets**, link them in the web UI:
@@ -129,14 +165,16 @@ negative, or the token is keyed by ticker rather than a contract address.
 Trace any bubble back to the alerts behind it:
 
 ```bash
-./.venv/bin/python -m hotgraph.positions --explain loganlim_x
+./.venv/bin/python -m hotgraph.positions --explain trader_one
 ```
 
 ## Adding or fixing a parser
 
 Alert formats are handled by `hotgraph/parsers/tracker.py`, which detects two
-layouts sharing a `[CHAIN] ... — S: N` header (chain tags include SOL, ETH,
-BSC, BASE, RH/Robinhood, ARC, ABS, HYPE...):
+layouts sharing a `[CHAIN] ... — S: N` header. The tags a bot can write
+(SOL, ETH, BSC, BASE, RH/ROBINHOOD, ARC, ABS, HYPE, POLY/MATIC, MONAD...) live
+in `hotgraph/chains.py`, one registry that also drives the Chain filter, the
+chain badges and which RPC the verifier uses — add a chain there:
 
 - **SENT / RECEIVED** legs (bots A and B)
 - **`🔴Swap X to: Y`** with `Holds`, `Exit`, `PnL` (bot C)
@@ -158,12 +196,48 @@ When you meet a format that doesn't parse:
 ./.venv/bin/python -m hotgraph.capture --samples bot_a -n 10
 ```
 
-Add the message verbatim to `tests/samples.py` with its expected fields, then
-make it pass:
+Add the message to `tests/samples.py` with its expected fields — keeping the
+layout exact but **replacing every handle, wallet address, tx hash and
+referral code with a placeholder of the same length** (the fixture's link
+offsets depend on it; the file ships with the project, so nothing from your
+tracker belongs in it) — then make it pass:
 
 ```bash
 ./.venv/bin/python -m tests.test_parser
 ```
+
+## Finding a token
+
+The search box beside the **Feed** button takes a contract address (or a
+ticker). A
+token the current filters draw is selected and zoomed to; anything else —
+filtered out, outside the top-N, hidden, or fully exited — opens in its own
+window: the same bubble with every holder attached, next to everything known
+about it (address, market cap, FDV, first/last action, and per holder the
+share held, bought/sold, invested/realised/PnL and entry market cap).
+
+## Holder window
+
+Click a holder bubble to open that wallet: the position it was clicked on
+in full (share, bought/sold, invested/realised/PnL, entry market cap, alert
+count, on-chain check if any), then every token the wallet currently holds
+(exited positions folded away underneath). **✓ verify holdings** asks the
+chain for the wallet's real balance of each held token, stores the answers
+and rebuilds positions — the same check as *verify holders*, from the
+wallet's side.
+
+## Arranging the bubbles
+
+The toolbar at the top of the map rearranges the graph without reloading it;
+holders travel with their token:
+
+- **⊞ pack** — every token cluster packed as tightly as circles allow.
+- **$ mcap**, **⏱ newest**, **⏱ oldest**, **👥 holders** — clusters laid out
+  in reading order (left→right, top→bottom) by market cap, last action, or
+  number of current holders.
+
+Click the active mode again to release the bubbles back to the free layout.
+Live updates keep the chosen arrangement.
 
 ## Per-token actions
 
@@ -173,7 +247,7 @@ Click a token bubble and two buttons hover above it:
   `config/rpc.yaml`, majors preconfigured) for each tracked wallet's real
   `balanceOf / totalSupply`. The chain's number overrides the alert-derived
   one until a newer trade lands, and the result shows as a toast.
-- **📈 chart** — opens `gmgn.ai/<chain>/token/<address>` in a new tab.
+- **GMGN logo** — opens `gmgn.ai/<chain>/token/<address>` in a new tab.
 
 Both need a contract address, so they don't appear on ticker-keyed tokens.
 
@@ -201,7 +275,7 @@ Demo rows live under `source='demo'` and are replaced on each re-seed.
 
 ## Notes
 
-- Node here is v16, too old for modern JS tooling, so the frontend has no build
-  step: plain HTML/CSS/JS with d3 v7 vendored in `web/vendor/`. It works offline.
+- The frontend has no build step and needs no Node: plain HTML/CSS/JS with d3 v7
+  vendored in `web/vendor/`. It works offline.
 - Market cap is whatever the most recent alert said, with `mcap_as_of` recorded
   so the tooltip can show how stale it is.

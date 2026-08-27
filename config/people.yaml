@@ -7,14 +7,14 @@
 #   known_only  - draw only people listed below / merged in the UI
 #
 # Identity is keyed by the trader's FULL wallet address, which every bot embeds
-# behind the alert's [wallet]/address link. Handles (@orangie, joz, dimiNew...)
+# behind the alert's [wallet]/address link. Handles (@orangie, waddles, vitalik...)
 # are display labels. When one person trades from several wallets, link those
 # wallets together in the web UI (Merge panel) — or seed them here:
 #
 # people:
-#   - name: "Logan"
+#   - name: "Trader one"
 #     color: "#f97316"
-#     handles: ["@loganlim_x"]        # matches alerts with this label
+#     handles: ["@trader_one"]        # matches alerts with this label
 #     wallets:
 #       - chain: evm
 #         address: "0x..."            # full address

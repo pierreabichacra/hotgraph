@@ -1,12 +1,17 @@
-"""Real alerts, verbatim. These are the contract the parser must satisfy —
-add every new format variant here before changing parser code."""
+"""Real alert layouts. These are the contract the parser must satisfy —
+add every new format variant here before changing parser code.
+
+Identities are placeholders: every handle, wallet address, tx hash and
+referral code from the original alerts has been swapped for a fake of the
+SAME LENGTH (the raw_json entity offsets are UTF-16 exact, so lengths must
+not change). Keep it that way — this file ships with the project."""
 
 SAMPLES = [
     {
         "id": "sol_fomo_buy",
         "chain_hint": None,
-        "text": """[SOL] [BUY] - (FOMO BUY) @loganlim_x — S: 1
-Fomo: @loganlim_x
+        "text": """[SOL] [BUY] - (FOMO BUY) @trader_one — S: 1
+Fomo: @trader_one
 Method: DF1o...7QBH
 ➡️ SENT: 993.40 USD Coin (USDC)
 ⬅️ RECEIVED: 689224.24 SelfMade by SP3ND (MADE) 0.07%
@@ -16,7 +21,7 @@ Fee: 0.000963 SOL ($0.0908)""",
         "expect": {
             "chain": "solana",
             "side": "BUY",
-            "trader_key": "loganlim_x",
+            "trader_key": "trader_one",
             "token_symbol": "MADE",
             "token_name": "SelfMade by SP3ND",
             "pct_supply": 0.07,
@@ -29,7 +34,7 @@ Fee: 0.000963 SOL ($0.0908)""",
     {
         "id": "base_pri_out_buy",
         "chain_hint": None,
-        "text": """[BASE] [PRI] - (OUT) joswe — S: 1
+        "text": """[BASE] [PRI] - (OUT) alice — S: 1
 Method: swap
 ➡️ SENT: 1 ETH
 ⬅️ RECEIVED: 879688538.89 Bitbank (BITBANK) 0.88%
@@ -39,7 +44,7 @@ MC: $276,295 - Age: 1 month ago""",
             "chain": "evm",
             # Tagged "(OUT)" but ETH went out and BITBANK came in: a BUY.
             "side": "BUY",
-            "trader_key": "joswe",
+            "trader_key": "alice",
             "token_symbol": "BITBANK",
             "token_name": "Bitbank",
             "pct_supply": 0.88,
@@ -52,7 +57,7 @@ MC: $276,295 - Age: 1 month ago""",
     {
         "id": "rh_holds_buy",
         "chain_hint": None,
-        "text": """[RH] primeJdid — S: 1
+        "text": """[RH] DaveMover — S: 1
 🟢Swap 0.5 ETH (~$939.08)
    to: 2.93M Market Maker (MM) 0.31%
 📊 Holds 14.27M MM (1.52%) ▲ | $15.9K in (13 buys) | 6d
@@ -60,7 +65,7 @@ TX | DFI | GMGN | DXS | $223.1K | 6d""",
         "expect": {
             "chain": "evm",
             "side": "BUY",
-            "trader_key": "primejdid",
+            "trader_key": "davemover",
             "token_symbol": "MM",
             "pct_supply": 0.31,
             "holds_pct": 1.52,
@@ -71,7 +76,7 @@ TX | DFI | GMGN | DXS | $223.1K | 6d""",
     {
         "id": "rh_exit_pnl_percent",
         "chain_hint": None,
-        "text": """[RH] joz — S: 1
+        "text": """[RH] bob — S: 1
 🔴Swap 2.75M Vladhood (VLAD) 0.27%
    to: 2.27 ETH (~$4.3K)
 📊 Exit (VLAD) ▼
@@ -80,7 +85,7 @@ TX | DFI | GMGN | DXS | $1.65M | 19h""",
         "expect": {
             "chain": "evm",
             "side": "SELL",
-            "trader_key": "joz",
+            "trader_key": "bob",
             "token_symbol": "VLAD",
             "pct_supply": 0.27,
             "is_exit": True,
@@ -147,7 +152,7 @@ Method: swap
     {
         "id": "bsc_exit_sell",
         "chain_hint": None,
-        "text": """[BSC] dimiNew — S: 1
+        "text": """[BSC] EveTest — S: 1
 🔴Swap 31.63M CHOUCHOU (CHOUCHOU) 3.16%
    to: 0.23 BNB (~$160.32)
 📊 Exit (CHOUCHOU) ▼
@@ -156,7 +161,7 @@ TX | BSD | DFI | GMGN | DXS | $5.4K | 23h""",
         "expect": {
             "chain": "evm",
             "side": "SELL",
-            "trader_key": "diminew",
+            "trader_key": "evetest",
             "token_symbol": "CHOUCHOU",
             "pct_supply": 3.16,
             "amount_tokens": 31_630_000.0,
@@ -213,7 +218,7 @@ TX""",
         "id": "eth_bridge_route_none",
         "chain_hint": None,
         # Every hop is a quote/stable asset — a bridge, not a token trade.
-        "text": """[ETH] buttersss — S: 1
+        "text": """[ETH] grace_nin — S: 1
 🌉 Bridge (deBridge)
 ➡️ SENT: 4 ETH (~$7.7K) To: 🌉 deBridge: Crosschain Forwarder
 0xB...973 ➡️ SENT: 12.00 Wrapped Ether (WETH) To: 0x9...3E3
@@ -228,7 +233,7 @@ TX | $6.53B | 6mo""",
     {
         "id": "bsc_multileg_sell",
         "chain_hint": None,
-        "text": """[BSC] - (OUT) mou3ak — S: 1
+        "text": """[BSC] - (OUT) frank6 — S: 1
 Method: 0xb2ee847c
 ➡️ SENT: 0.005 BNB To: 0xc...4f8
 0x1...24E ➡️ SENT: 0.00 Wrapped BNB (WBNB) To: 0xE...A9c
@@ -238,7 +243,7 @@ MC: $2,294,959 - Age: 15 hours ago""",
         "expect": {
             "chain": "evm",
             "side": "SELL",
-            "trader_key": "mou3ak",
+            "trader_key": "frank6",
             "token_symbol": "潜龙勿用",
             "token_name": "潜龙勿用",
             "amount_tokens": 1334.98,
@@ -249,7 +254,7 @@ MC: $2,294,959 - Age: 15 hours ago""",
         "id": "bsc_from_counterparty_buy",
         "chain_hint": None,
         # "From: 0x6...c5b" after the leg must not eat the "8.19%".
-        "text": """[BSC] - (OUT) buttersss — S: 1
+        "text": """[BSC] - (OUT) grace_nin — S: 1
 Method: 0xaa5d82c3
 ⬅️ RECEIVED: 81940498.93 WAGMI (GMI) 8.19% From: 0x6...c5b
 ➡️ SENT: NFT #4563198 Pancake V3 Positions NFT-V1 (PCS-V3-POS) To: 0x6...c5b
@@ -270,29 +275,29 @@ MC: $82,786 - Age: 8 months ago""",
     {
         "id": "bsc_multi_wallet_sold_inline_links",
         "chain_hint": None,
-        "text": """🔴 [BSC] 2 wallets sold 豆豆 (https://bscscan.com/token/0x5fF8Aaae467b86366ce4a9A5cE1621E060837777) in #118002792 (https://bscscan.com/block/118002792)
+        "text": """🔴 [BSC] 2 wallets sold 豆豆 (https://bscscan.com/token/0xE5f60718293A4b5C6d7E8f9012345601b803D005) in #118002792 (https://bscscan.com/block/118002792)
 
-1. PGmgn (https://bscscan.com/address/0x07fDD1E22CF245f8c09cEc01157beF6dA6879be6) | TX (https://bscscan.com/tx/0x0257f8709e7a2aa328f04bc0000d011d37cfc94611e5ad55415b27e376f26ca0)
-├ 🔴 10.01M 酸奶豆糕 (豆豆) (https://bscscan.com/token/0x5fF8Aaae467b86366ce4a9A5cE1621E060837777) 1.00%
+1. NickA (https://bscscan.com/address/0xA1b2C3d4E5f60718293A4b5C6d7E8f9012345601) | TX (https://bscscan.com/tx/0x5e6f708192a3b4c55e6f708192a3b4c55e6f708192a3b4c55e6f708192a3b4c5)
+├ 🔴 10.01M 酸奶豆糕 (豆豆) (https://bscscan.com/token/0xE5f60718293A4b5C6d7E8f9012345601b803D005) 1.00%
 ├ to: 0.08 BNB (~$55.50)
 └ 📉 PnL -0.12 BNB (0.39x) | ⏱️ 3h
 
-2. P (https://bscscan.com/address/0xbA08016b34434ce9A36631018fE5Efa0BB8C3537) | TX (https://bscscan.com/tx/0x14b9fa08438b9bb37b01bb7fd13ecbf8c9e35d1329f9fb913960318bbb908046)
-├ 🔴 9.95M 酸奶豆糕 (豆豆) (https://bscscan.com/token/0x5fF8Aaae467b86366ce4a9A5cE1621E060837777) 0.99%
+2. P (https://bscscan.com/address/0xB2c3D4e5F60718293a4B5c6D7e8F90123456A702) | TX (https://bscscan.com/tx/0x4d5e6f708192a3b44d5e6f708192a3b44d5e6f708192a3b44d5e6f708192a3b4)
+├ 🔴 9.95M 酸奶豆糕 (豆豆) (https://bscscan.com/token/0xE5f60718293A4b5C6d7E8f9012345601b803D005) 0.99%
 ├ to: 0.078 BNB (~$53.94)
 └ 📉 PnL -0.12 BNB (0.38x) | ⏱️ 3h
 
 Σ 0.16 BNB (~$109.44) ← 19.96M (2.00%)
-BSD (https://basedbot.app/r/refrewards/token/bsc/0x5ff8aaae467b86366ce4a9a5ce1621e060837777) | DFI (https://www.defined.fi/bsc/0x5ff8aaae467b86366ce4a9a5ce1621e060837777) | GMGN (https://gmgn.ai/bsc/token/0x5ff8aaae467b86366ce4a9a5ce1621e060837777?ref=d4l63SNN) | DXS (https://dexscreener.com/bsc/0x5ff8aaae467b86366ce4a9a5ce1621e060837777) | $5.8K | 3h""",
+BSD (https://basedbot.app/r/refrewards/token/bsc/0xe5f60718293a4b5c6d7e8f9012345601b803d005) | DFI (https://www.defined.fi/bsc/0xe5f60718293a4b5c6d7e8f9012345601b803d005) | GMGN (https://gmgn.ai/bsc/token/0xe5f60718293a4b5c6d7e8f9012345601b803d005?ref=xxxxxxxx) | DXS (https://dexscreener.com/bsc/0xe5f60718293a4b5c6d7e8f9012345601b803d005) | $5.8K | 3h""",
         "expect_all": [
             {
                 "chain": "evm",
                 "chain_tag": "BSC",
                 "side": "SELL",
-                "trader_key": "0x07fdd1e22cf245f8c09cec01157bef6da6879be6",
-                "trader_handle": "pgmgn",
-                "wallet_addr": "0x07fDD1E22CF245f8c09cEc01157beF6dA6879be6",
-                "token_key": "0x5fF8Aaae467b86366ce4a9A5cE1621E060837777",
+                "trader_key": "0xa1b2c3d4e5f60718293a4b5c6d7e8f9012345601",
+                "trader_handle": "nicka",
+                "wallet_addr": "0xA1b2C3d4E5f60718293A4b5C6d7E8f9012345601",
+                "token_key": "0xE5f60718293A4b5C6d7E8f9012345601b803D005",
                 "token_symbol": "豆豆",
                 "token_name": "酸奶豆糕",
                 "amount_tokens": 10_010_000.0,
@@ -300,19 +305,19 @@ BSD (https://basedbot.app/r/refrewards/token/bsc/0x5ff8aaae467b86366ce4a9a5ce162
                 "amount_usd": 55.50,
                 "pnl_x": 0.39,
                 "mcap_usd": 5_800.0,
-                "tx_hash": "0x0257f8709e7a2aa328f04bc0000d011d37cfc94611e5ad55415b27e376f26ca0",
+                "tx_hash": "0x5e6f708192a3b4c55e6f708192a3b4c55e6f708192a3b4c55e6f708192a3b4c5",
             },
             {
                 "side": "SELL",
-                "trader_key": "0xba08016b34434ce9a36631018fe5efa0bb8c3537",
+                "trader_key": "0xb2c3d4e5f60718293a4b5c6d7e8f90123456a702",
                 "trader_handle": "p",
-                "token_key": "0x5fF8Aaae467b86366ce4a9A5cE1621E060837777",
+                "token_key": "0xE5f60718293A4b5C6d7E8f9012345601b803D005",
                 "amount_tokens": 9_950_000.0,
                 "pct_supply": 0.99,
                 "amount_usd": 53.94,
                 "pnl_x": 0.38,
                 "mcap_usd": 5_800.0,
-                "tx_hash": "0x14b9fa08438b9bb37b01bb7fd13ecbf8c9e35d1329f9fb913960318bbb908046",
+                "tx_hash": "0x4d5e6f708192a3b44d5e6f708192a3b44d5e6f708192a3b44d5e6f708192a3b4",
             },
         ],
     },
@@ -323,7 +328,7 @@ BSD (https://basedbot.app/r/refrewards/token/bsc/0x5ff8aaae467b86366ce4a9a5ce162
         "chain_hint": None,
         "text": """🟢 [BSC] 2 wallets bought 大圣 in #118000583
 
-1. PGmgn | TX
+1. NickA | TX
 ├ 🟢 0.05 BNB (~$34.75)
 └ to: 4.12M What if (大圣) 0.41%
 
@@ -335,43 +340,94 @@ BSD (https://basedbot.app/r/refrewards/token/bsc/0x5ff8aaae467b86366ce4a9a5ce162
 BSD | DFI | GMGN | DXS | $10.9K | 1m""",
         "raw_json": {
             "entities": [
-                {"_": "MessageEntityTextUrl", "offset": 26, "length": 2, "url": "https://bscscan.com/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+                {"_": "MessageEntityTextUrl", "offset": 26, "length": 2, "url": "https://bscscan.com/token/0xF60718293a4B5c6D7e8F90123456A702c904E106"},
                 {"_": "MessageEntityTextUrl", "offset": 32, "length": 10, "url": "https://bscscan.com/block/118000583"},
-                {"_": "MessageEntityTextUrl", "offset": 47, "length": 5, "url": "https://bscscan.com/address/0x07fDD1E22CF245f8c09cEc01157beF6dA6879be6"},
-                {"_": "MessageEntityTextUrl", "offset": 55, "length": 2, "url": "https://bscscan.com/tx/0x96926cb361fd6463abbd5243693e24e6d32c0c2437a750b5e9026d9056dafa5e"},
-                {"_": "MessageEntityTextUrl", "offset": 94, "length": 12, "url": "https://bscscan.com/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
-                {"_": "MessageEntityTextUrl", "offset": 117, "length": 1, "url": "https://bscscan.com/address/0xbA08016b34434ce9A36631018fE5Efa0BB8C3537"},
-                {"_": "MessageEntityTextUrl", "offset": 121, "length": 2, "url": "https://bscscan.com/tx/0xab2800f387b4a9652d8fea38dd5fd7c106ebd401a89ff655514bd31fb7ca09f1"},
-                {"_": "MessageEntityTextUrl", "offset": 160, "length": 12, "url": "https://bscscan.com/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
-                {"_": "MessageEntityTextUrl", "offset": 216, "length": 3, "url": "https://basedbot.app/r/refrewards/token/bsc/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
-                {"_": "MessageEntityTextUrl", "offset": 222, "length": 3, "url": "https://www.defined.fi/bsc/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
-                {"_": "MessageEntityTextUrl", "offset": 228, "length": 4, "url": "https://gmgn.ai/bsc/token/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777?ref=d4l63SNN"},
-                {"_": "MessageEntityTextUrl", "offset": 235, "length": 3, "url": "https://dexscreener.com/bsc/0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777"},
+                {"_": "MessageEntityTextUrl", "offset": 47, "length": 5, "url": "https://bscscan.com/address/0xA1b2C3d4E5f60718293A4b5C6d7E8f9012345601"},
+                {"_": "MessageEntityTextUrl", "offset": 55, "length": 2, "url": "https://bscscan.com/tx/0x2b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f708192"},
+                {"_": "MessageEntityTextUrl", "offset": 94, "length": 12, "url": "https://bscscan.com/token/0xF60718293a4B5c6D7e8F90123456A702c904E106"},
+                {"_": "MessageEntityTextUrl", "offset": 117, "length": 1, "url": "https://bscscan.com/address/0xB2c3D4e5F60718293a4B5c6D7e8F90123456A702"},
+                {"_": "MessageEntityTextUrl", "offset": 121, "length": 2, "url": "https://bscscan.com/tx/0x1a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f7081"},
+                {"_": "MessageEntityTextUrl", "offset": 160, "length": 12, "url": "https://bscscan.com/token/0xF60718293a4B5c6D7e8F90123456A702c904E106"},
+                {"_": "MessageEntityTextUrl", "offset": 216, "length": 3, "url": "https://basedbot.app/r/refrewards/token/bsc/0xF60718293a4B5c6D7e8F90123456A702c904E106"},
+                {"_": "MessageEntityTextUrl", "offset": 222, "length": 3, "url": "https://www.defined.fi/bsc/0xF60718293a4B5c6D7e8F90123456A702c904E106"},
+                {"_": "MessageEntityTextUrl", "offset": 228, "length": 4, "url": "https://gmgn.ai/bsc/token/0xF60718293a4B5c6D7e8F90123456A702c904E106?ref=xxxxxxxx"},
+                {"_": "MessageEntityTextUrl", "offset": 235, "length": 3, "url": "https://dexscreener.com/bsc/0xF60718293a4B5c6D7e8F90123456A702c904E106"},
             ]
         },
         "expect_all": [
             {
                 "chain": "evm",
                 "side": "BUY",
-                "trader_key": "0x07fdd1e22cf245f8c09cec01157bef6da6879be6",
-                "trader_handle": "pgmgn",
-                "token_key": "0xeF6c6dd797E6883651Fb5BB99006bf4cafb47777",
+                "trader_key": "0xa1b2c3d4e5f60718293a4b5c6d7e8f9012345601",
+                "trader_handle": "nicka",
+                "token_key": "0xF60718293a4B5c6D7e8F90123456A702c904E106",
                 "token_symbol": "大圣",
                 "token_name": "What if",
                 "amount_tokens": 4_120_000.0,
                 "pct_supply": 0.41,
                 "amount_usd": 34.75,
                 "mcap_usd": 10_900.0,
-                "tx_hash": "0x96926cb361fd6463abbd5243693e24e6d32c0c2437a750b5e9026d9056dafa5e",
+                "tx_hash": "0x2b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f708192",
             },
             {
                 "side": "BUY",
-                "trader_key": "0xba08016b34434ce9a36631018fe5efa0bb8c3537",
+                "trader_key": "0xb2c3d4e5f60718293a4b5c6d7e8f90123456a702",
                 "trader_handle": "p",
                 "amount_tokens": 4_070_000.0,
                 "pct_supply": 0.41,
                 "amount_usd": 34.75,
-                "tx_hash": "0xab2800f387b4a9652d8fea38dd5fd7c106ebd401a89ff655514bd31fb7ca09f1",
+                "tx_hash": "0x1a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f7081",
+            },
+        ],
+    },
+    {
+        # Tokens sent to a plain wallet with nothing received: a move between
+        # the person's wallets, not a sale. The sender's side is TRANSFER_OUT
+        # (Exit: that wallet is empty now) and the linked recipient gets a
+        # mirrored TRANSFER_IN so the holding follows the tokens.
+        "id": "base_transfer_to_own_wallet",
+        "chain_hint": None,
+        "text": """[BASE] DaveMover — S: 1
+Method: transfer
+➡️ SENT: 13.2K Agent Zero Token (A0T) 1.32% To: 0xf...31E
+📊 Exit (A0T) ▼
+TX | BSD | DFI | GMGN | DXS | $2.28M | 1y""",
+        "raw_json": {
+            "entities": [
+                {"_": "MessageEntityTextUrl", "offset": 7, "length": 9, "url": "https://basescan.org/address/0xC3d4E5f60718293A4b5C6d7E8f9012345601B803"},
+                {"_": "MessageEntityTextUrl", "offset": 74, "length": 3, "url": "https://basescan.org/token/0x0718293A4b5C6d7E8f9012345601B803d005F207"},
+                {"_": "MessageEntityTextUrl", "offset": 89, "length": 9, "url": "https://basescan.org/address/0xD4e5F60718293a4B5c6D7e8F90123456a702C904"},
+                {"_": "MessageEntityTextUrl", "offset": 108, "length": 3, "url": "https://basescan.org/token/0x0718293A4b5C6d7E8f9012345601B803d005F207"},
+                {"_": "MessageEntityTextUrl", "offset": 115, "length": 2, "url": "https://basescan.org/tx/0x3c4d5e6f708192a33c4d5e6f708192a33c4d5e6f708192a33c4d5e6f708192a3"},
+                {"_": "MessageEntityTextUrl", "offset": 120, "length": 3, "url": "https://basedbot.app/r/refrewards/token/base/0x0718293A4b5C6d7E8f9012345601B803d005F207"},
+                {"_": "MessageEntityTextUrl", "offset": 126, "length": 3, "url": "https://www.defined.fi/base/0x0718293A4b5C6d7E8f9012345601B803d005F207"},
+                {"_": "MessageEntityTextUrl", "offset": 132, "length": 4, "url": "https://gmgn.ai/base/token/0x0718293A4b5C6d7E8f9012345601B803d005F207?ref=xxxxxxxx"},
+                {"_": "MessageEntityTextUrl", "offset": 139, "length": 3, "url": "https://dexscreener.com/base/0x0718293A4b5C6d7E8f9012345601B803d005F207"},
+            ]
+        },
+        "expect_all": [
+            {
+                "chain": "evm",
+                "side": "TRANSFER_OUT",
+                "trader_key": "0xc3d4e5f60718293a4b5c6d7e8f9012345601b803",
+                "counterparty": "0xd4e5f60718293a4b5c6d7e8f90123456a702c904",
+                "token_symbol": "A0T",
+                "token_name": "Agent Zero Token",
+                "amount_tokens": 13_200.0,
+                "pct_supply": 1.32,
+                "amount_usd": None,
+                "mcap_usd": 2_280_000.0,
+                "is_exit": True,
+                "tx_hash": "0x3c4d5e6f708192a33c4d5e6f708192a33c4d5e6f708192a33c4d5e6f708192a3",
+            },
+            {
+                "side": "TRANSFER_IN",
+                "trader_key": "0xd4e5f60718293a4b5c6d7e8f90123456a702c904",
+                "counterparty": "0xc3d4e5f60718293a4b5c6d7e8f9012345601b803",
+                "token_symbol": "A0T",
+                "pct_supply": 1.32,
+                "amount_usd": None,
+                "is_exit": False,
             },
         ],
     },

@@ -5,8 +5,8 @@ and handles both rather than guessing which bot sent what.
 
 Layout A — explicit swap legs:
 
-    [SOL] [BUY] - (FOMO BUY) @loganlim_x — S: 1
-    Fomo: @loganlim_x
+    [SOL] [BUY] - (FOMO BUY) @trader_one — S: 1
+    Fomo: @trader_one
     Method: DF1o...7QBH
     ➡️ SENT: 993.40 USD Coin (USDC)
     ⬅️ RECEIVED: 689224.24 SelfMade by SP3ND (MADE) 0.07%
@@ -14,7 +14,7 @@ Layout A — explicit swap legs:
 
 Layout B — swap-to with PnL:
 
-    [BSC] dimiNew — S: 1
+    [BSC] EveTest — S: 1
     🔴Swap 31.63M CHOUCHOU (CHOUCHOU) 3.16%
        to: 0.23 BNB (~$160.32)
     📊 Exit (CHOUCHOU) ▼
@@ -25,7 +25,7 @@ wallets trade the same token in the same block):
 
     🔴 [BSC] 2 wallets sold 豆豆 in #118002792
 
-    1. PGmgn | TX
+    1. NickA | TX
     ├ 🔴 10.01M 酸奶豆糕 (豆豆) 1.00%
     ├ to: 0.08 BNB (~$55.50)
     └ 📉 PnL -0.12 BNB (0.39x) | ⏱️ 3h
@@ -54,9 +54,12 @@ which is valid because supply is fixed.
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from .base import (
     BUY,
+    TRANSFER_IN,
+    TRANSFER_OUT,
     SELL,
     Event,
     Leg,
@@ -253,7 +256,7 @@ def _safe_float(v):
 RE_MULTI_HEAD = re.compile(
     r"^[^\[\n]{0,8}\[[A-Za-z]+\]\s+(\d+)\s+wallets?\s+(sold|bought)\b", re.IGNORECASE
 )
-# "1. PGmgn | TX" — the label is a bot nickname for the wallet.
+# "1. NickA | TX" — the label is a bot nickname for the wallet.
 RE_SECTION = re.compile(r"^\s*(\d+)\.\s+(.+?)\s*\|\s*TX\b", re.MULTILINE)
 # Box-drawing prefixes and the status dot in front of each section line.
 RE_TREE = re.compile(r"^\s*[├└│┌┐┘┬┴┼─]+\s*")
@@ -413,17 +416,86 @@ def parse(text: str, ctx: ParseContext) -> list[Event]:
     if not chain:
         return []
 
-    picked = _pick(*_legs(text))
+    sent, received = _legs(text)
+    picked = _pick(sent, received)
     if picked is None:
         return []
     token_leg, counter_leg, side = picked
+    wallet_url = wallet_addr_from_urls(ctx.urls())
+
+    # Tokens went out and nothing came back, to a plain address: the person
+    # moved them to another wallet (usually their own). Not a sale — no
+    # proceeds, and the holding continues under the recipient. Exactly one
+    # leg, though: a contract call that also moves BNB/WBNB around and drops
+    # the tokens at a router is a sale whose incoming leg the bot left out.
+    recipient = None
+    if side == SELL and not received and len(sent) == 1:
+        recipient = _transfer_recipient(text, ctx, wallet_url)
+        if recipient is not None:
+            side = TRANSFER_OUT
 
     ev = _build_event(
         chain=chain, hdr=hdr, who_text=_handle(text, hdr.who),
-        wallet_url=wallet_addr_from_urls(ctx.urls()),
+        wallet_url=wallet_url,
         token_addr=token_addr_from_urls(ctx.urls()),
         token_leg=token_leg, counter_leg=counter_leg, side=side,
         body=text, ctx=ctx, mcap=_mcap(text),
         tx_hash=tx_hash_from_urls(ctx.urls()),
     )
-    return [ev] if ev is not None else []
+    if ev is None:
+        return []
+    if recipient is None:
+        return [ev]
+
+    full, key = recipient
+    ev.counterparty = key
+    ev.amount_usd = None                      # nothing was received for it
+    ev.is_exit = bool(RE_EXIT.search(text))   # the sending wallet is empty now
+    if not full:
+        return [ev]                           # truncated address: nowhere to mirror to
+    ev_in = replace(
+        ev, trader_key=key, trader_handle=None, wallet_addr=key,
+        side=TRANSFER_IN, is_exit=False, counterparty=ev.trader_key,
+        pnl_usd=None, pnl_x=None, holds_pct=None, holds_amount=None,
+    )
+    return [ev, ev_in]
+
+
+RE_TO_ADDR = re.compile(r"\bTo\s*:\s*(.+?)\s*$", re.IGNORECASE)
+_RE_FULL_ADDR = re.compile(r"^(0x[a-fA-F0-9]{40}|[1-9A-HJ-NP-Za-km-z]{32,44})$")
+
+
+def _transfer_recipient(text: str, ctx: ParseContext, sender: str | None) -> tuple[bool, str] | None:
+    """(is_full_address, key) for the wallet the SENT line's 'To:' names,
+    or None when the destination isn't a plain address — 'To: Maestro:
+    Fees' or a router name is a swap whose incoming leg the bot left out,
+    and that must stay a sale.
+
+    The full address comes from the link on the 'To:' label (bots print it
+    truncated); a link-less truncated label yields a 'trunc:' key.
+    """
+    lines = text.splitlines()
+    pos = 0
+    for line in lines:
+        start, end = pos, pos + len(line)
+        pos = end + 1
+        if not RE_SENT.search(line):
+            continue
+        m = RE_TO_ADDR.search(line)
+        if not m:
+            continue
+        label, inline = strip_inline_urls(m.group(1))
+        label = label.strip()
+        if not (RE_TRUNC.fullmatch(label) or _RE_FULL_ADDR.match(label)):
+            return None
+        # Links positioned inside this line (entities), plus any inline ones.
+        lo, hi = utf16_offset(text, start), utf16_offset(text, end)
+        urls = [u for off, _ln, u in ctx.linked_urls() if lo <= off < hi] + inline
+        for u in urls:
+            addr = wallet_addr_from_urls([u])
+            if addr and (not sender or addr.lower() != sender.lower()):
+                return True, (addr.lower() if addr.startswith("0x") else addr)
+        if _RE_FULL_ADDR.match(label):
+            return True, (label.lower() if label.startswith("0x") else label)
+        return False, f"trunc:{label}"
+    return None

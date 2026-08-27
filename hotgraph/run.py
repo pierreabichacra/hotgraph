@@ -121,7 +121,13 @@ def main() -> None:
     try:
         asyncio.run(amain(args.host, args.port))
     except KeyboardInterrupt:
-        pass
+        return
+    if not session_exists():
+        # The Sign out button logged the device out and deleted the session;
+        # the listener's disconnect is what ended the run. start.py treats
+        # exit code 3 as "ask for a new login".
+        print("Signed out — Telegram session removed. Run again to log in.", flush=True)
+        raise SystemExit(3)
 
 
 if __name__ == "__main__":
