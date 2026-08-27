@@ -3174,38 +3174,54 @@ syncDayControls();
 loadActivity();
 
 /* ---------- live updates ----------
- * `capture --live` writes new alerts into the DB as they arrive; poll a cheap
- * counts endpoint and re-fetch the graph when anything changed. Passing
- * refit=false keeps the user's pan/zoom during background updates. */
+ * The listener writes new alerts into the DB as they arrive and pushes a
+ * /api/health payload down /api/stream the moment it has (server-sent
+ * events), so the graph moves as soon as positions are rebuilt — not on the
+ * next poll. The 10s poll of the same payload stays as a fallback for a
+ * dropped stream, and keeps the "⟳ ago" label ticking. Passing refit=false
+ * keeps the user's pan/zoom during background updates. */
 let lastHealth = "";
 let prevRaw = null;
+
+function applyHealth(h) {
+  const syncEl = document.getElementById("sync");
+  syncEl.innerHTML = h.last_fetch ? `⟳ ${agoSpan(h.last_fetch, "ago")}` : "";
+
+  // New alert arrived (not just a rebuild we caused ourselves) -> chime.
+  if (prevRaw !== null && h.raw_messages > prevRaw) ding();
+  prevRaw = h.raw_messages;
+
+  handleEliminations(h.eliminations);
+  updateWalletsBadge(h.wallet_suggestions_new);
+
+  // Data signature: counts plus the positions-rebuild stamp. The stamp
+  // matters — a live alert first inserts events, then rebuilds positions a
+  // moment later; without it a poll landing in between would render the old
+  // ordering and never re-check (counts stop changing).
+  const sig = `${h.raw_messages}|${h.events}|${h.positions}|${h.tokens}|${h.built_at}`;
+  if (lastHealth && sig !== lastHealth) {
+    load(false, true); // live: flash whatever changed
+    if (!panel.hidden) { loadTraders(); loadGroups(); }
+    loadFeed(); // no-op when the drawer is closed
+    if (actDay === null) loadActivity();
+  }
+  lastHealth = sig;
+}
+
+// Push channel. EventSource reconnects on its own after a drop, and the
+// server's first message on every (re)connection is a full payload, so
+// nothing that happened while disconnected is missed.
+if (window.EventSource) {
+  const es = new EventSource("/api/stream");
+  es.addEventListener("change", (e) => {
+    try { applyHealth(JSON.parse(e.data)); } catch (_) { /* malformed frame */ }
+  });
+}
+
 setInterval(async () => {
   try {
     const res = await fetch("/api/health");
-    const h = await res.json();
-
-    const syncEl = document.getElementById("sync");
-    syncEl.innerHTML = h.last_fetch ? `⟳ ${agoSpan(h.last_fetch, "ago")}` : "";
-
-    // New alert arrived (not just a rebuild we caused ourselves) -> chime.
-    if (prevRaw !== null && h.raw_messages > prevRaw) ding();
-    prevRaw = h.raw_messages;
-
-    handleEliminations(h.eliminations);
-    updateWalletsBadge(h.wallet_suggestions_new);
-
-    // Data signature: counts plus the positions-rebuild stamp. The stamp
-    // matters — a live alert first inserts events, then rebuilds positions a
-    // moment later; without it a poll landing in between would render the old
-    // ordering and never re-check (counts stop changing).
-    const sig = `${h.raw_messages}|${h.events}|${h.positions}|${h.tokens}|${h.built_at}`;
-    if (lastHealth && sig !== lastHealth) {
-      load(false, true); // live: flash whatever changed
-      if (!panel.hidden) { loadTraders(); loadGroups(); }
-      loadFeed(); // no-op when the drawer is closed
-      if (actDay === null) loadActivity();
-    }
-    lastHealth = sig;
+    applyHealth(await res.json());
   } catch (_) { /* server briefly down — retry next tick */ }
 }, 10000);
 

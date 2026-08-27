@@ -5,11 +5,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import time
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -406,6 +408,48 @@ def message_links(raw_id: int):
         add("", m.group(0).rstrip(".,"))
 
     return {"raw_id": raw_id, "links": links}
+
+
+# ---------------------------------------------------------------- live push
+# Every open page holds a /api/stream connection. The moment the listener has
+# stored a Telegram alert (and rebuilt positions), notify_change() wakes each
+# of them with a fresh /api/health payload, so the graph moves within the
+# rebuild time instead of waiting for the page's next poll. The poll stays as
+# a fallback for browsers/proxies that drop the stream.
+_STREAM_SUBS: set[asyncio.Queue] = set()
+
+
+def notify_change() -> None:
+    """Wake every /api/stream subscriber. Coalesces: a burst of alerts while a
+    page is still catching up becomes one wake-up, not a queue of them."""
+    for q in list(_STREAM_SUBS):
+        if q.empty():
+            q.put_nowait(True)
+
+
+@app.get("/api/stream")
+async def stream():
+    async def gen():
+        q: asyncio.Queue = asyncio.Queue()
+        _STREAM_SUBS.add(q)
+        try:
+            # First payload straight away, so a reconnecting page catches up
+            # on anything it missed while the stream was down.
+            yield f"event: change\ndata: {json.dumps(health())}\n\n"
+            while True:
+                try:
+                    await asyncio.wait_for(q.get(), timeout=20)
+                    yield f"event: change\ndata: {json.dumps(health())}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # keeps proxies from timing the stream out
+        finally:
+            _STREAM_SUBS.discard(q)
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/api/health")
@@ -1389,6 +1433,7 @@ async def rebuild(req: RebuildRequest | None = None):
         await asyncio.to_thread(ingest_mod.run, None, 0, since_ts, iprog)
         REBUILD_STATE.update(phase="positions", done=0, total=None)
         summary = await asyncio.to_thread(positions_mod.run)
+        notify_change()  # other open tabs redraw too
         return {"ok": True, "fetched": fetched, "days": days, **summary}
     finally:
         REBUILD_STATE.update(active=False, phase=None, done=0, total=None, detail="")

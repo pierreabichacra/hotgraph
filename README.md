@@ -52,7 +52,7 @@ last 31 days of alerts, and opens the page. Every run after that goes straight
 to the server — about a second, plus catching up on whatever was missed while
 the app was off.
 
-The page is at **http://127.0.0.1:8000**. New alerts appear within ~10 s, no
+The page is at **http://127.0.0.1:8000**. New alerts appear within about a second, no
 refresh needed; the header shows "synced Xs ago". **Ctrl-C stops all of it**
 (in `start.bat`, answer *Y* to "Terminate batch job?").
 

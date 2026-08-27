@@ -177,6 +177,39 @@ async def catch_up(client, sources: list[Source], first_run_days: int = 31) -> i
     return events_added
 
 
+def _notify_pages() -> None:
+    """Tell every open page the data moved (see api.notify_change). The API
+    module is only importable when the web half is present; live capture
+    without it just relies on the page's own polling."""
+    try:
+        from . import api as api_mod
+    except Exception:  # pragma: no cover - CLI-only installs
+        return
+    api_mod.notify_change()
+
+
+# One positions rebuild at a time, in a worker thread so the Telegram client
+# and the API keep answering while SQLite churns (~1s on a large history).
+# Alerts that land during a rebuild don't queue up rebuilds of their own —
+# they set a flag and the running one goes round once more.
+_rebuild_lock = asyncio.Lock()
+_rebuild_pending = False
+
+
+async def _rebuild_and_notify() -> None:
+    global _rebuild_pending
+    from .positions import run as rebuild_positions
+
+    _rebuild_pending = True
+    if _rebuild_lock.locked():
+        return
+    async with _rebuild_lock:
+        while _rebuild_pending:
+            _rebuild_pending = False
+            await asyncio.to_thread(rebuild_positions)
+            _notify_pages()
+
+
 async def setup_live(client, sources: list[Source]) -> int:
     """Register the new-message handler. Returns how many chats it watches."""
     by_chat = {}
@@ -194,20 +227,23 @@ async def setup_live(client, sources: list[Source]) -> int:
             raw_id = _store(conn, src.id, event.message)
             if raw_id is None:
                 return
-            # Parse just this message; the page's polling picks the change up
-            # without any re-scan of history.
+            # Parse just this message — no re-scan of history.
             from .ingest import ingest_one
             added = ingest_one(conn, raw_id)
             set_meta(conn, "last_fetch_ts", int(time.time()))
 
-        if added:
-            from .positions import run as rebuild_positions
-            rebuild_positions()
-
         stamp = time.strftime("%H:%M:%S")
         preview = _msg_text(event.message).replace("\n", " ")[:90]
-        note = f" -> {added} event(s), positions rebuilt" if added else ""
+        note = f" -> {added} event(s), rebuilding positions" if added else ""
         print(f"[{stamp}] {src.id}: {preview}{note}", flush=True)
+
+        if added:
+            # Pages are woken again once the rebuild lands; this first wake
+            # lets the feed/chime react to the alert itself right away.
+            _notify_pages()
+            await _rebuild_and_notify()
+        else:
+            _notify_pages()
 
     return len(by_chat)
 
