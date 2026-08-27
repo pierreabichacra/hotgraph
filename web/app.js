@@ -663,12 +663,14 @@ function decorateNodes(node) {
     .attr("class", (d) =>
       `label ${d.kind === "token" ? "token" : ""} ${d.status === "SOLD" || d.dead ? "faded" : ""}`
     )
-    .attr("dy", (d) => (d.kind === "token" ? "0.02em" : "-0.05em"))
-    .text((d) => {
-      if (d.kind === "token") return displaySymbol(d.symbol);
-      // Hide the name on bubbles too small to fit it.
-      return d.r >= 15 ? d.person : "";
-    });
+    // Small holders carry only the name, so it sits on the centre line;
+    // bigger ones share the bubble with the share/entry lines below.
+    .attr("dy", (d) => (d.kind === "token" ? "0.02em" : d.r < 15 ? "0.35em" : "-0.05em"))
+    // The name always shows — on the smallest bubbles a touch smaller, and
+    // the label's dark halo keeps it readable where it spills past the rim.
+    .style("font-size", (d) =>
+      d.kind === "token" || d.r >= 15 ? null : `${Math.max(8, Math.min(11, d.r * 0.8)).toFixed(1)}px`)
+    .text((d) => (d.kind === "token" ? displaySymbol(d.symbol) : d.person));
 
   node
     .select("text.label.sub")
