@@ -1256,7 +1256,7 @@ function renderTokenList() {
 // Fetch fresh market caps for every token the drawer currently lists (which
 // mirrors the graph). Retries live server-side, in hotgraph/mcap.py.
 // Two callers: the drawer button (progress bar + toast) and a quiet timer
-// below that keeps the numbers current on its own every few minutes.
+// below that keeps the numbers current on its own every 15 minutes.
 const mcapBtn = document.getElementById("mcapRefresh");
 const MCAP_BTN_LABEL = "💲 refresh market caps";
 let mcapBusy = false;
@@ -1334,12 +1334,12 @@ async function refreshMcaps({ silent = false } = {}) {
 
 mcapBtn.addEventListener("click", () => refreshMcaps());
 
-// Automatic refresh: every few minutes, quietly, and only while the tab is
+// Automatic refresh: every 15 minutes, quietly, and only while the tab is
 // visible — a background tab would just spend DexScreener's rate budget for
 // nobody. A tab that comes back overdue refreshes right away. The interval
 // is checked every 30s rather than scheduled outright so a manual refresh
 // (or a failure) simply pushes the next automatic one back by a full period.
-const MCAP_AUTO_MS = 3 * 60 * 1000;
+const MCAP_AUTO_MS = 15 * 60 * 1000;
 
 function autoRefreshMcaps() {
   if (document.hidden || mcapBusy) return;
