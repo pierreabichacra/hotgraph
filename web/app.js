@@ -622,11 +622,15 @@ function render(data, live = false) {
       })
   );
 
-  const holders = data.nodes.filter((n) => n.kind === "person");
+  // Counts come from the full answer even while holders are hidden — the
+  // positions still exist, they're just not drawn.
+  const counted = hideHolders && lastGraph ? lastGraph.nodes : data.nodes;
+  const holders = counted.filter((n) => n.kind === "person");
   const tokens = data.nodes.filter((n) => n.kind === "token");
   const sold = holders.filter((n) => n.status === "SOLD").length;
   document.getElementById("stat").innerHTML =
-    `<b>${tokens.length}</b> tokens<i>·</i><b>${holders.length}</b> positions<i>·</i><b>${sold}</b> sold`;
+    `<b>${tokens.length}</b> tokens<i>·</i><b>${holders.length}</b> positions<i>·</i><b>${sold}</b> sold` +
+    (hideHolders ? `<i>·</i>holders hidden` : "");
 
   renderTokenList();
 }
@@ -834,10 +838,10 @@ function flowRows(clusters, aspect) {
 
 const arrangeEl = document.getElementById("arrange");
 function syncArrange() {
-  arrangeEl.querySelectorAll("button").forEach((b) =>
+  arrangeEl.querySelectorAll("button[data-mode]").forEach((b) =>
     b.classList.toggle("active", b.dataset.mode === arrangeMode));
 }
-arrangeEl.querySelectorAll("button").forEach((btn) => {
+arrangeEl.querySelectorAll("button[data-mode]").forEach((btn) => {
   btn.addEventListener("click", () => {
     // Clicking the active mode again releases the bubbles to the free layout.
     arrangeMode = arrangeMode === btn.dataset.mode ? "free" : btn.dataset.mode;
@@ -1021,11 +1025,48 @@ async function load(refit = true, live = false) {
 
   try {
     const res = await fetch(`/api/graph?${p}`);
-    render(await res.json(), live);
+    lastGraph = await res.json();
+    render(viewOf(lastGraph), live);
   } catch (err) {
     document.getElementById("stat").textContent = `error: ${err.message}`;
   }
 }
+
+/* ---------- hide holders ----------
+ * A view-only switch: the API answer is kept as-is (lastGraph) and the
+ * holder bubbles + their links are dropped before drawing, so the tokens
+ * stand alone and flipping it back costs no request. Sticky per browser. */
+let lastGraph = null;
+let hideHolders = localStorage.getItem("hg_hide_holders") === "1";
+const holdersToggle = document.getElementById("holdersToggle");
+
+function viewOf(data) {
+  if (!hideHolders) return data;
+  return {
+    ...data,
+    nodes: data.nodes.filter((n) => n.kind === "token"),
+    links: [],
+  };
+}
+
+function syncHoldersToggle() {
+  holdersToggle.classList.toggle("active", hideHolders);
+  holdersToggle.setAttribute("aria-pressed", hideHolders ? "true" : "false");
+  holdersToggle.textContent = hideHolders ? "👥 show holders" : "👥 hide holders";
+}
+
+holdersToggle.addEventListener("click", () => {
+  hideHolders = !hideHolders;
+  localStorage.setItem("hg_hide_holders", hideHolders ? "1" : "0");
+  syncHoldersToggle();
+  if (lastGraph) {
+    // Same data, different view: the API answer still holds every holder,
+    // and render() carries bubble positions over, so tokens stay put.
+    const copy = JSON.parse(JSON.stringify(lastGraph));
+    render(viewOf(copy), false);
+  }
+});
+syncHoldersToggle();
 
 /* ---------- users filter ----------
  * Multi-select: the graph draws only the checked people's positions, and

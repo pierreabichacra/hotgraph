@@ -249,6 +249,10 @@ holders travel with their token:
 Click the active mode again to release the bubbles back to the free layout.
 Live updates keep the chosen arrangement.
 
+**👥 hide holders** (same bar) draws the tokens alone — every holder bubble
+and link disappears until you click it again. It's a view switch, not a
+filter: nothing is re-fetched, and the choice is remembered per browser.
+
 ## Per-token actions
 
 Click a token bubble and two buttons hover above it:
