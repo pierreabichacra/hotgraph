@@ -431,4 +431,62 @@ TX | BSD | DFI | GMGN | DXS | $2.28M | 1y""",
             },
         ],
     },
+    {
+        # A grouped buy where each wallet got a dust amount ("&lt;0.0001",
+        # as the bot HTML-escapes it). This once produced NO tracker events,
+        # so ingest fell through to the loose parser, which filed the header
+        # sentence itself as a holder named "🟢 2 wallets bought ...". Both
+        # halves are pinned here: the dust leg parses, and a grouped alert
+        # never reaches the fallback.
+        "id": "bsc_multi_wallet_dust_buy",
+        "chain_hint": None,
+        "text": """🟢 [BSC] 2 wallets bought DUST in #118014116
+
+1. PGmgn | TX
+├ 🟢 0.05 BNB (~$34.80)
+├ to: &lt;0.0001 Dusty Token (DUST)
+└ 📊 Holds 0.01163
+
+2. P | TX
+├ 🟢 0.05 BNB (~$34.80)
+├ to: &lt;0.0001 Dusty Token (DUST)
+└ 📊 Holds 0.037163
+
+Σ 0.1 BNB (~$69.61) → &lt;0.0001
+BSD | DFI | GMGN | DXS | $28.41M | 1d""",
+        "raw_json": {
+            "entities": [
+                {"_": "MessageEntityTextUrl", "offset": 26, "length": 4, "url": "https://bscscan.com/token/0xF60718293a4B5c6D7e8F90123456A702c904E106"},
+                {"_": "MessageEntityTextUrl", "offset": 34, "length": 10, "url": "https://bscscan.com/block/118014116"},
+                {"_": "MessageEntityTextUrl", "offset": 49, "length": 5, "url": "https://bscscan.com/address/0xA1b2C3d4E5f60718293A4b5C6d7E8f9012345601"},
+                {"_": "MessageEntityTextUrl", "offset": 57, "length": 2, "url": "https://bscscan.com/tx/0x2b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f708192"},
+                {"_": "MessageEntityTextUrl", "offset": 143, "length": 1, "url": "https://bscscan.com/address/0xB2c3D4e5F60718293a4B5c6D7e8F90123456A702"},
+                {"_": "MessageEntityTextUrl", "offset": 147, "length": 2, "url": "https://bscscan.com/tx/0x1a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f7081"},
+                {"_": "MessageEntityTextUrl", "offset": 276, "length": 4, "url": "https://gmgn.ai/bsc/token/0xF60718293a4B5c6D7e8F90123456A702c904E106?ref=xxxxxxxx"},
+            ]
+        },
+        "expect_all": [
+            {
+                "chain": "evm",
+                "side": "BUY",
+                "trader_key": "0xa1b2c3d4e5f60718293a4b5c6d7e8f9012345601",
+                "trader_handle": "pgmgn",
+                "token_key": "0xF60718293a4B5c6D7e8F90123456A702c904E106",
+                "token_symbol": "DUST",
+                "token_name": "Dusty Token",
+                "amount_tokens": 0.0001,
+                "amount_usd": 34.80,
+                "mcap_usd": 28_410_000.0,
+                "tx_hash": "0x2b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f7081922b3c4d5e6f708192",
+            },
+            {
+                "side": "BUY",
+                "trader_key": "0xb2c3d4e5f60718293a4b5c6d7e8f90123456a702",
+                "trader_handle": "p",
+                "amount_tokens": 0.0001,
+                "amount_usd": 34.80,
+                "tx_hash": "0x1a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f70811a2b3c4d5e6f7081",
+            },
+        ],
+    },
 ]

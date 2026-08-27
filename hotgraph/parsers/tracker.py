@@ -68,6 +68,7 @@ from .base import (
     classify_who,
     find_number_after,
     find_usd_in,
+    is_multi_wallet,
     parse_header,
     parse_leg,
     to_float,
@@ -253,19 +254,14 @@ def _safe_float(v):
 # Layout C: "N wallets sold/bought"
 # ---------------------------------------------------------------------------
 
-RE_MULTI_HEAD = re.compile(
-    r"^[^\[\n]{0,8}\[[A-Za-z]+\]\s+(\d+)\s+wallets?\s+(sold|bought)\b", re.IGNORECASE
-)
+# Detection (is_multi_wallet) lives in base.py — ingest and the generic
+# parser need it too.
 # "1. NickA | TX" — the label is a bot nickname for the wallet.
 RE_SECTION = re.compile(r"^\s*(\d+)\.\s+(.+?)\s*\|\s*TX\b", re.MULTILINE)
 # Box-drawing prefixes and the status dot in front of each section line.
 RE_TREE = re.compile(r"^\s*[├└│┌┐┘┬┴┼─]+\s*")
 RE_STATUS_DOT = re.compile(r"^\s*[🔴🟢🟥🟩📉📈]+\s*")
 RE_SIGMA = re.compile(r"^\s*Σ", re.MULTILINE)
-
-
-def is_multi_wallet(text: str) -> bool:
-    return bool(RE_MULTI_HEAD.search(text or ""))
 
 
 def _sections(text: str) -> list[tuple[str, int, int]]:

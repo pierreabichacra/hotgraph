@@ -11,8 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hotgraph.ingest import is_non_trade  # noqa: E402
-from hotgraph.parsers import get_parser  # noqa: E402
+from hotgraph.ingest import parse_message  # noqa: E402
 from hotgraph.parsers.base import ParseContext  # noqa: E402
 from tests.samples import SAMPLES  # noqa: E402
 
@@ -24,19 +23,16 @@ def approx(a, b, tol=1e-6):
 
 
 def main() -> int:
-    parser = get_parser("tracker")
-    generic = get_parser("generic")
     failures = 0
 
     for s in SAMPLES:
         raw_json = json.dumps(s["raw_json"]) if s.get("raw_json") else None
         ctx = ParseContext(source_id="test", ts=1_700_000_000, chain_hint=s["chain_hint"],
                            raw_json=raw_json)
-        evs = parser(s["text"], ctx)
-        # Same fallback ingest applies, so a sample that must produce
-        # nothing is checked against the loose parser too.
-        if not evs and not is_non_trade(s["text"]):
-            evs = generic(s["text"], ctx)
+        # Exactly what ingest does — tracker first, loose fallback when
+        # allowed — so a sample that must produce nothing is checked against
+        # the fallback too.
+        evs, _ = parse_message("tracker", s["text"], ctx)
 
         print(f"\n=== {s['id']} ===")
         # Multi-event alerts: one expectation per event, in order.

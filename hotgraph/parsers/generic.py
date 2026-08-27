@@ -17,6 +17,7 @@ from .base import (
     chain_from_tag,
     find_number_after,
     guess_side,
+    is_multi_wallet,
     is_quote,
     parse_header,
     token_addr_from_urls,
@@ -46,6 +47,12 @@ def _ticker(text: str) -> str | None:
 @register("generic")
 def parse(text: str, ctx: ParseContext) -> list[Event]:
     if not text:
+        return []
+    # "N wallets bought X in #block": the header names no trader, so the
+    # loose read would file the sentence itself as a holder. Only the
+    # tracker parser understands the numbered sections; if it found nothing,
+    # nothing is the answer.
+    if is_multi_wallet(text):
         return []
 
     hdr = parse_header(text)

@@ -414,6 +414,21 @@ RE_CHAIN_TAG = re.compile(r"^\s*(?:[^\w\s\[\]]{1,3}\s*)?\[([A-Za-z]+)\]")
 # Score can be a number or an emoji ("S: 1", "S: ❌").
 RE_SCORE_TAIL = re.compile(r"[—–-]\s*S\s*:\s*\S+\s*$")
 
+# Layout C header: "🟢 [BSC] 2 wallets bought QQQB in #118014116". Anything
+# may sit before the tag on the first line (status dots vary by bot), so the
+# prefix is unbounded — but stays on that line and before the first bracket.
+RE_MULTI_HEAD = re.compile(
+    r"^[^\[\n]*?\[[A-Za-z]+\]\s+(\d+)\s+wallets?\s+(sold|bought)\b", re.IGNORECASE
+)
+
+
+def is_multi_wallet(text: str) -> bool:
+    """Grouped 'N wallets sold/bought' alert (tracker Layout C)? Lives here
+    rather than in tracker.py because ingest and the generic parser need the
+    answer too: such an alert has no single trader in its header, so nothing
+    but the section-aware tracker parser may ever produce events for it."""
+    return bool(RE_MULTI_HEAD.search(text or ""))
+
 
 @dataclass
 class Header:
@@ -528,6 +543,8 @@ RE_LEG = re.compile(
 # Case-sensitive on purpose — the bot capitalises these, and a lowercase
 # "to:" is Layout B's own swap line, which never reaches parse_leg.
 RE_COUNTERPARTY = re.compile(r"\s+(?:To|From)\s*:\s.*$")
+# "<0.0001", "&lt;0.0001", "~0.05", "≈0.05" — the qualifier, not the number.
+RE_AMOUNT_HEDGE = re.compile(r"^\s*(?:&lt;|<|~|≈)\s*")
 
 
 def parse_leg(text: str) -> Leg | None:
@@ -545,6 +562,10 @@ def parse_leg(text: str) -> Leg | None:
     # Drop the counterparty first, or "ETH To: 0xe...B66" stops looking
     # like ETH and the transfer gets mistaken for a token sale.
     text = RE_COUNTERPARTY.sub("", text.strip())
+    # Dust amounts print as "<0.0001 QQQB" (sometimes HTML-escaped as
+    # "&lt;0.0001"), and some bots hedge with "~"/"≈". Take the figure as
+    # given — a leg that fails to parse here loses the whole trade.
+    text = RE_AMOUNT_HEDGE.sub("", text)
     m = RE_LEG.match(text)
     if not m:
         return None

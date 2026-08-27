@@ -17,8 +17,7 @@ import re
 from .config import load_sources, norm_addr
 from .db import session as db_session
 from .parsers import get_parser
-from .parsers.base import ParseContext
-from .parsers.tracker import is_multi_wallet
+from .parsers.base import ParseContext, is_multi_wallet
 
 # Alerts with no token trade in them: plain transfers, approvals, raw method
 # calls, and your own bot commands / the bot's replies to them. Expected not
@@ -37,6 +36,29 @@ def is_non_trade(text: str) -> bool:
     # "N wallets sold/bought" layout, says so in the header.
     has_swap = "Swap" in text or ("SENT" in text.upper() and "RECEIV" in text.upper())
     return not has_swap and not is_multi_wallet(text)
+
+
+def parse_message(parser_id: str, text: str, ctx: ParseContext) -> tuple[list, str | None]:
+    """Events for one message: the source's parser, then the loose fallback.
+
+    Returns (events, error). The fallback never runs for transfers, approvals
+    and commands (it would invent trades), nor for grouped "N wallets" alerts
+    — those name no trader in the header, so the loose read files the
+    headline itself as a person. The test harness uses the same rule, so what
+    passes there is what lands in the DB.
+    """
+    parser = get_parser(parser_id) or get_parser("tracker")
+    error = None
+    try:
+        evs = parser(text, ctx) or []
+    except Exception as exc:  # a parser bug must not stop the stream
+        evs, error = [], str(exc)
+    if not evs and parser_id != "generic" and not is_non_trade(text) and not is_multi_wallet(text):
+        try:
+            evs = get_parser("generic")(text, ctx) or []
+        except Exception:
+            evs = []
+    return evs, error
 
 
 def _insert_event(conn, raw_id: int, source_id: str, ev) -> bool:
@@ -123,7 +145,8 @@ def ingest_one(conn, raw_id: int) -> int:
 
     Used by live mode — re-parsing the whole history per incoming alert would
     be wasteful, and events are keyed by raw_id so this composes with full
-    re-runs safely.
+    re-runs safely. The message's previous events (if any) are replaced, so
+    re-running it after a parser fix leaves no stale rows behind.
     """
     sources = {s.id: s for s in load_sources()}
     row = conn.execute(
@@ -135,23 +158,15 @@ def ingest_one(conn, raw_id: int) -> int:
 
     src = sources.get(row["source"])
     parser_id = src.parser if src else "tracker"
-    parser = get_parser(parser_id) or get_parser("tracker")
     ctx = ParseContext(
         source_id=row["source"],
         ts=row["ts"],
         chain_hint=src.chain_hint if src else None,
         raw_json=row["raw_json"],
     )
-    try:
-        evs = parser(row["text"], ctx) or []
-    except Exception:
-        evs = []
-    if not evs and not is_non_trade(row["text"]):
-        try:
-            evs = get_parser("generic")(row["text"], ctx) or []
-        except Exception:
-            evs = []
+    evs, _ = parse_message(parser_id, row["text"], ctx)
 
+    conn.execute("DELETE FROM events WHERE raw_id = ?", (row["id"],))
     added = 0
     for ev in evs:
         if not ev.token_key or not ev.trader_key:
@@ -223,22 +238,11 @@ def run(
                 chain_hint=src.chain_hint if src else None,
                 raw_json=row["raw_json"],
             )
-            try:
-                evs = parser(row["text"], ctx) or []
-            except Exception as exc:
+            evs, error = parse_message(parser_id, row["text"], ctx)
+            if error is not None:
                 st["errors"] += 1
-                evs = []
                 if len(unparsed) < show_unparsed:
-                    unparsed.append((src_id, f"[parser error: {exc}]\n{row['text']}"))
-
-            # Fall back to the loose parser before declaring a message a
-            # miss — but never for transfers/approvals/commands, where a loose
-            # regex would invent trades that don't exist.
-            if not evs and parser_id != "generic" and not is_non_trade(row["text"]):
-                try:
-                    evs = get_parser("generic")(row["text"], ctx) or []
-                except Exception:
-                    evs = []
+                    unparsed.append((src_id, f"[parser error: {error}]\n{row['text']}"))
 
             if not evs:
                 if is_non_trade(row["text"]):
