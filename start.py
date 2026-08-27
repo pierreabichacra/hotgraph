@@ -280,10 +280,14 @@ def launch(vp, host, port, browser):
         rc = proc.wait()
     except KeyboardInterrupt:
         # The console already delivered Ctrl-C to the child; give it time to
-        # close the Telegram client and the server cleanly.
+        # close the Telegram client and the server cleanly (a few seconds).
+        # On Windows, cmd may also ask "Terminate batch job (Y/N)?" — that
+        # is the .bat, not HotGraph; either answer is fine, it is stopping.
+        say("Stopping HotGraph - waiting for it to close cleanly...")
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
+            say("  still running after 15s - forcing it to stop.")
             proc.kill()
         return 0
     if rc not in (0, SIGNED_OUT):

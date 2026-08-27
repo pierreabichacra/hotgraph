@@ -98,8 +98,22 @@ async def amain(host: str, port: int) -> None:
         rebuild_positions()
 
     server = uvicorn.Server(
-        uvicorn.Config("hotgraph.api:app", host=host, port=port, log_level="warning")
+        uvicorn.Config(
+            "hotgraph.api:app", host=host, port=port, log_level="warning",
+            # Ctrl-C must not wait on a browser that keeps its /api/stream
+            # open: streams are told to end (below) and, whatever is still
+            # hanging on after this many seconds, the server stops anyway.
+            timeout_graceful_shutdown=3,
+        )
     )
+
+    async def end_streams_on_exit():
+        # uvicorn owns the SIGINT handler; the first thing it does is flip
+        # should_exit. Watch for that and close the streams right away, so
+        # the graceful shutdown has nothing to wait for.
+        while not server.should_exit:
+            await asyncio.sleep(0.2)
+        api_mod.close_streams()
 
     print(f"\nHotGraph up: http://{host}:{port}  (watching {n} bot chats live)", flush=True)
     print("Ctrl-C to stop.", flush=True)
@@ -110,11 +124,14 @@ async def amain(host: str, port: int) -> None:
     serve_task = asyncio.create_task(server.serve())
     tg_task = asyncio.create_task(client.run_until_disconnected())
     reconcile_task = asyncio.create_task(reconcile_forever(client, sources))
+    streams_task = asyncio.create_task(end_streams_on_exit())
     try:
         await asyncio.wait({serve_task, tg_task}, return_when=asyncio.FIRST_COMPLETED)
     finally:
+        print("\nStopping HotGraph...", flush=True)
+        api_mod.close_streams()
         server.should_exit = True
-        for t in (serve_task, tg_task, reconcile_task):
+        for t in (serve_task, tg_task, reconcile_task, streams_task):
             t.cancel()
         await client.disconnect()
 

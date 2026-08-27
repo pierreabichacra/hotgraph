@@ -417,6 +417,7 @@ def message_links(raw_id: int):
 # rebuild time instead of waiting for the page's next poll. The poll stays as
 # a fallback for browsers/proxies that drop the stream.
 _STREAM_SUBS: set[asyncio.Queue] = set()
+_STREAMS_OPEN = True
 
 
 def notify_change() -> None:
@@ -427,18 +428,32 @@ def notify_change() -> None:
             q.put_nowait(True)
 
 
+def close_streams() -> None:
+    """End every open /api/stream now. Called on shutdown: uvicorn waits for
+    in-flight requests to finish before it stops, and a stream never finishes
+    on its own — without this, Ctrl-C would hang until the launcher gave up
+    and killed the process. Pages reconnect by themselves once we're back."""
+    global _STREAMS_OPEN
+    _STREAMS_OPEN = False
+    for q in list(_STREAM_SUBS):
+        q.put_nowait(None)
+
+
 @app.get("/api/stream")
 async def stream():
     async def gen():
         q: asyncio.Queue = asyncio.Queue()
         _STREAM_SUBS.add(q)
         try:
+            if not _STREAMS_OPEN:
+                return
             # First payload straight away, so a reconnecting page catches up
             # on anything it missed while the stream was down.
             yield f"event: change\ndata: {json.dumps(health())}\n\n"
-            while True:
+            while _STREAMS_OPEN:
                 try:
-                    await asyncio.wait_for(q.get(), timeout=20)
+                    if await asyncio.wait_for(q.get(), timeout=20) is None:
+                        return  # shutting down
                     yield f"event: change\ndata: {json.dumps(health())}\n\n"
                 except asyncio.TimeoutError:
                     yield ": ping\n\n"  # keeps proxies from timing the stream out
